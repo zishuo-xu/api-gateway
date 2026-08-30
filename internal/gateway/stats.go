@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // histogram is a fixed-bucket accumulator. The gateway keeps latency

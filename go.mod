@@ -1,4 +1,4 @@
-module github.com/xuzishuo/api-gateway
+module github.com/zishuo-xu/api-gateway
 
 go 1.22
 

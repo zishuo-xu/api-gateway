@@ -17,8 +17,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // testRedis returns a live Redis client, or skips the test when the local

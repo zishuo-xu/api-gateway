@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // delayedSSEUpstream is a fake LLM backend shaped like a real one: it idles for

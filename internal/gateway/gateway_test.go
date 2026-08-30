@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/config"
 )
 
 func TestIsStreamed(t *testing.T) {

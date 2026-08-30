@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // upstreamRecorder is an upstream that records the path it was called with.

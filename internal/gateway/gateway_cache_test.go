@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // TestUsageFromJSONReadsEveryPromptCacheDialect is the core of cache

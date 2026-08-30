@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
-	"github.com/xuzishuo/api-gateway/internal/gateway"
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/gateway"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 func main() {

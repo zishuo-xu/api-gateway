@@ -23,7 +23,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // ----- admin console -----

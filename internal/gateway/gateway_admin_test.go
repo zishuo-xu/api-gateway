@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/config"
 )
 
 // The admin token used to be baked into the dashboard HTML: anyone who could

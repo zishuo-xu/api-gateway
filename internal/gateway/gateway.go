@@ -23,8 +23,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/xuzishuo/api-gateway/internal/config"
-	"github.com/xuzishuo/api-gateway/internal/store"
+	"github.com/zishuo-xu/api-gateway/internal/config"
+	"github.com/zishuo-xu/api-gateway/internal/store"
 )
 
 // Route is an upstream route loaded from DB. It owns the public path prefix and
