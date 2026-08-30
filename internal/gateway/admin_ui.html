@@ -1,0 +1,2448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>API 中转站 · 监控台</title>
+<!-- Inlined so the browser never probes /favicon.ico. That probe carries no API
+     key, so the gateway answers 401 and the request log fills up with one bogus
+     "failure" per page load. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e14'/%3E%3Cpath d='M8 16h7M17 9l7 7-7 7' fill='none' stroke='%2358a6ff' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #151a23; --panel2: #1b2230; --line: #252c3a; --line2: #333d50;
+    --txt: #e6edf3; --muted: #8b949e; --dim: #6e7681;
+    --accent: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+    --r: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font-size: 14px; line-height: 1.5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header { position: sticky; top: 0; z-index: 30; display: flex; align-items: center;
+    justify-content: space-between; gap: 16px; padding: 13px 28px;
+    border-bottom: 1px solid var(--line); background: rgba(11,14,20,.88);
+    backdrop-filter: saturate(180%) blur(12px); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .mark { width: 32px; height: 32px; border-radius: 9px; display: flex;
+    align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: #06121f;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff); }
+  .brand h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .brand .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .status .kbd-hint { color: var(--dim); font-size: 11px; border: 1px solid var(--line);
+    border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
+  /* Sticky offsets: header (--hh) + tab bar (--th). Kept as variables so the
+     sticky table headers stay glued right under the tab bar. */
+  :root { --hh: 57px; --th: 46px; }
+  /* Tab bar: sticky under the header so switching tabs is always reachable. */
+  .tabs { position: sticky; top: var(--hh); z-index: 40; display: flex; gap: 2px;
+    padding: 0 28px; max-width: 1240px; margin: 0 auto;
+    background: rgba(11,14,20,.82); backdrop-filter: saturate(1.8) blur(12px);
+    border-bottom: 1px solid var(--line); }
+  .tab { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent;
+    color: var(--dim); font: inherit; font-size: 13px; font-weight: 600;
+    padding: 13px 15px 11px; cursor: pointer; white-space: nowrap;
+    display: flex; align-items: center; gap: 7px;
+    transition: color .15s, border-color .15s; }
+  .tab:hover { color: var(--txt); }
+  .tab:focus-visible { outline: none; color: var(--txt); box-shadow: inset 0 0 0 2px rgba(88,166,255,.3); border-radius: 6px 6px 0 0; }
+  .tab[aria-selected="true"] { color: var(--txt); border-bottom-color: var(--accent); }
+  .tab .n { font-size: 11px; font-weight: 600; color: var(--dim); background: var(--line);
+    border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+  .tab[aria-selected="true"] .n { color: var(--accent); background: rgba(88,166,255,.14); }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+  .status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 0 3px rgba(63,185,80,.16); }
+  .status .sep { color: var(--line2); }
+  .wrap { padding: 22px 28px 48px; max-width: 1240px; margin: 0 auto; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 1080px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 620px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .card { position: relative; overflow: hidden; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px 13px; }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line2); }
+  .card.c-accent::before { background: var(--accent); }
+  .card.c-green::before { background: var(--green); }
+  .card.c-red::before { background: var(--red); }
+  .card .label { color: var(--muted); font-size: 11.5px; letter-spacing: .3px; }
+  .card .value { font-size: 23px; font-weight: 600; margin-top: 7px; letter-spacing: -.4px;
+    font-variant-numeric: tabular-nums; }
+  .card .value.green { color: var(--green); }
+  .card .value.red { color: var(--red); }
+  .card .value.accent { color: var(--accent); }
+  .card .value.purple { color: var(--purple); }
+  /* Sub-label under a KPI value: distinguishes "-average" from "p95" without
+     another card. */
+  .card .sub2 { color: var(--muted); font-size: 11px; margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 18px 18px 16px; margin-top: 16px; }
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .panel h2 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .sec-sub { font-size: 12px; color: var(--muted); }
+  canvas { width: 100%; height: 220px; display: block; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line2);
+    background: rgba(139,148,158,.06); }
+  .badge.closed { color: var(--green); border-color: rgba(63,185,80,.35); background: rgba(63,185,80,.08); }
+  .badge.open { color: var(--red); border-color: rgba(248,81,73,.45); background: rgba(248,81,73,.1); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 500; white-space: nowrap;
+    position: sticky; top: calc(var(--hh) + var(--th)); background: var(--panel); z-index: 5; }
+  tbody tr { transition: background .12s; }
+  tbody tr:hover td { background: rgba(88,166,255,.05); }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  td.center { text-align: center; }
+  td.muted, .muted { color: var(--muted); }
+  .chip { display: inline-block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; padding: 2px 9px; border-radius: 5px;
+    background: rgba(139,148,158,.13); color: var(--txt); white-space: nowrap; }
+  .fmt { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 999px;
+    background: rgba(188,140,255,.12); color: var(--purple); white-space: nowrap; }
+  .ops { white-space: nowrap; }
+  .ops .lk { margin-right: 12px; }
+  .ops .lk.danger { margin-right: 0; }
+  .rname { font-weight: 500; }
+  .warnchip { display: inline-block; margin-left: 6px; font-size: 11px; padding: 2px 8px;
+    border-radius: 999px; color: var(--yellow); background: rgba(210,153,34,.12);
+    border: 1px solid rgba(210,153,34,.35); white-space: nowrap; }
+  .method { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px;
+    background: rgba(139,148,158,.14); color: var(--muted); }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { color: var(--green); background: rgba(63,185,80,.12); }
+  .pill.warn { color: var(--yellow); background: rgba(210,153,34,.12); }
+  .pill.err { color: var(--red); background: rgba(248,81,73,.12); }
+  /* Login gate: full-screen cover shown when the session is missing/expired. */
+  .login-gate { position: fixed; inset: 0; z-index: 100; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; }
+  .login-box { width: 340px; background: var(--panel); border: 1px solid var(--line2);
+    border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 12px; }
+  .login-box h2 { margin: 0; font-size: 15px; color: var(--txt); }
+  .login-sub { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dim); }
+  .login-box input[type="password"] { background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 10px 12px; font-size: 13px; outline: none; }
+  .login-box input[type="password"]:focus { border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .login-err { font-size: 12px; color: var(--red); min-height: 16px; }
+  /* Reject-reason tag shown next to a 4xx/5xx status. Without it every 429
+     looks the same, and "raise the quota" vs "back off the rate" are not
+     the same advice. */
+  .rej { display: inline-block; margin-left: 5px; font-size: 11px; padding: 1px 6px;
+    border-radius: 4px; background: rgba(248,81,73,.14); color: var(--red);
+    border: 1px solid rgba(248,81,73,.28); white-space: nowrap; max-width: 110px;
+    overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+  .updated { color: var(--muted); font-size: 12px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .form-grid.cols3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .form-grid.cols4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 1100px) { .form-grid.cols4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { .form-grid, .form-grid.cols3, .form-grid.cols4 { grid-template-columns: 1fr; } }
+  .form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .err { color: var(--red); font-size: 12px; flex: 1 1 240px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.7; }
+  .hint code { background: rgba(139,148,158,.15); border-radius: 4px;
+    padding: 1px 5px; font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .field { min-width: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
+  .field .tip { font-weight: 400; color: var(--dim); }
+  .field input[type=text], .field input[type=password], .field select, .field input[type=number] {
+    width: 100%; background: var(--bg); border: 1px solid var(--line2); color: var(--txt);
+    border-radius: 8px; padding: 9px 12px; font-size: 13px; outline: none;
+    transition: border-color .15s, box-shadow .15s; }
+  .field input:focus, .field select:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .field input::placeholder { color: var(--dim); }
+  .field select { cursor: pointer; appearance: auto; }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 36px; }
+  .pw-toggle { position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 2px; }
+  .model-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .model-tag { display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(88,166,255,.12); color: var(--accent); border: 1px solid rgba(88,166,255,.3);
+    border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 500; }
+  .model-tag .rm { cursor: pointer; opacity: .7; font-size: 14px; line-height: 1; }
+  .model-tag .rm:hover { opacity: 1; color: var(--red); }
+  .model-input-wrap { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .model-input-wrap input { width: 240px; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 7px 12px; font-size: 13px; outline: none;
+    transition: border-color .15s, box-shadow .15s; }
+  .model-input-wrap input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .model-tags:empty { display: none; }
+  .btn-sm { background: rgba(88,166,255,.1); color: var(--accent); border: 1px solid rgba(88,166,255,.35);
+    border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s; }
+  .btn-sm:hover { background: rgba(88,166,255,.18); border-color: var(--accent); }
+  .btn { background: var(--accent); color: #04101f; border: 0; border-radius: 8px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: filter .15s, transform .1s; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line2); }
+  .btn.ghost:hover { color: var(--txt); border-color: var(--muted); filter: none; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .err { color: var(--red); font-size: 12px; margin-left: 10px; }
+  /* Row actions are real <button>s (not inline spans) so they are keyboard
+     focusable, screen-reader friendly and get a visible focus ring. */
+  .lk { background: transparent; border: 1px solid var(--line2); color: var(--accent);
+    cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+    padding: 4px 10px; border-radius: 6px; white-space: nowrap;
+    transition: background .15s, border-color .15s, color .15s; }
+  .lk:hover { background: rgba(88,166,255,.12); border-color: var(--accent); }
+  .lk:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(88,166,255,.25); }
+  .lk.danger { color: var(--red); margin-left: 6px; border-color: rgba(248,81,73,.35); }
+  .lk.danger:hover { background: rgba(248,81,73,.12); border-color: var(--red); }
+  .lk.danger:focus-visible { box-shadow: 0 0 0 3px rgba(248,81,73,.25); }
+  .lk.ok { color: var(--green); border-color: rgba(63,185,80,.35); }
+  .lk.ok:hover { background: rgba(63,185,80,.12); border-color: var(--green); }
+
+  /* In-page confirm dialog: replaces the native confirm(), which looks out of
+     place and blocks the page (and any automation) until dismissed. */
+  .mask { position: fixed; inset: 0; background: rgba(3,6,12,.62);
+    backdrop-filter: blur(3px); display: none; align-items: center;
+    justify-content: center; z-index: 90; }
+  .mask.on { display: flex; }
+  .dialog { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--r);
+    padding: 20px; width: min(380px, calc(100vw - 40px));
+    box-shadow: 0 18px 48px rgba(0,0,0,.5); }
+  .dialog h3 { font-size: 15px; margin: 0 0 8px; }
+  .dialog p { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0 0 18px; }
+  .dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .btn.danger { background: var(--red); color: #fff; }
+  /* Issue-key dialog: stacked labelled fields instead of a wide inline row. */
+  .issue-dialog { width: min(460px, calc(100vw - 40px)); max-height: calc(100vh - 60px);
+    overflow-y: auto; }
+  .fgroup { margin-bottom: 12px; }
+  .fgroup label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .fgroup input[type="text"], .fgroup input[type="number"], .fgroup input[type="datetime-local"] {
+    width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 9px 11px; font-size: 13px; outline: none; }
+  .fgroup input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .fgroup .quota-group input[type="number"] { width: auto; flex: 1; }
+
+  /* Toast replaces alert() — non-blocking, auto-dismisses. */
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 14px);
+    background: var(--panel); border: 1px solid var(--line2); color: var(--txt);
+    padding: 10px 18px; border-radius: 999px; font-size: 13px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s; z-index: 95; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.err { border-color: rgba(248,81,73,.5); color: var(--red); }
+  .toast.ok { border-color: rgba(63,185,80,.5); color: var(--green); }
+
+  /* ---------- loading / empty / error states ---------- */
+  /* Skeleton rows: painted while a table's first fetch is in flight, so the
+     pane never shows a bare "加载中…" that reads like a broken page. */
+  @keyframes sk-shimmer { from { background-position: -400px 0; } to { background-position: 400px 0; } }
+  .sk-bar { display: block; height: 11px; border-radius: 5px;
+    background: linear-gradient(90deg, var(--panel2) 25%, var(--line2) 45%, var(--panel2) 65%);
+    background-size: 800px 100%; animation: sk-shimmer 1.3s linear infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .sk-bar { animation: none; }
+    tr.log-new { animation: none !important; }
+  }
+  .td-empty { text-align: center; padding: 30px 12px !important; color: var(--dim);
+    font-size: 12.5px; }
+  .td-error { text-align: center; padding: 22px 12px !important; color: var(--red);
+    font-size: 12.5px; }
+  .td-error .lk { margin-left: 8px; }
+
+  /* Buttons while their request is in flight: no double-submit, and the label
+     says what is happening instead of going dead silent. */
+  .btn:disabled, .btn-sm:disabled, .lk:disabled { opacity: .55; cursor: not-allowed; }
+  .btn:disabled:hover, .btn-sm:disabled:hover { filter: none; background: var(--accent); }
+  .btn.ghost:disabled:hover { background: transparent; }
+  .btn.busy { position: relative; }
+  .btn.busy::after { content: ""; display: inline-block; width: 11px; height: 11px;
+    margin-left: 8px; vertical-align: -1px; border-radius: 50%;
+    border: 2px solid rgba(4,16,31,.35); border-top-color: #04101f;
+    animation: btn-spin .7s linear infinite; }
+  @keyframes btn-spin { to { transform: rotate(360deg); } }
+
+  /* Fresh log rows flash once so the eye catches what just arrived in a table
+     that repaints every 2s. */
+  @keyframes row-fade { from { background: rgba(88,166,255,.16); } to { background: transparent; } }
+  tr.log-new { animation: row-fade 1.6s ease-out; }
+
+  /* Connection banner: shown when admin API calls start failing, so a dead
+     gateway reads as "gateway down", not as mysteriously frozen numbers. */
+  .connbar { position: sticky; top: calc(var(--hh) + var(--th)); z-index: 35;
+    display: none; align-items: center; justify-content: center; gap: 10px;
+    padding: 7px 12px; font-size: 12.5px; color: #e3b341;
+    background: rgba(34,26,8,.92); border-bottom: 1px solid rgba(210,153,34,.4);
+    backdrop-filter: blur(8px); }
+  .connbar.on { display: flex; }
+  /* ---------- 接入指南 ---------- */
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { .twocol { grid-template-columns: 1fr; } }
+  .kvcards { display: flex; flex-direction: column; gap: 12px; }
+  .kvc { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+  .kvc-h { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 600; margin-bottom: 9px; }
+  .kvc-n { width: 19px; height: 19px; flex: none; border-radius: 50%; background: rgba(88,166,255,.16);
+    color: var(--accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .kvc-b { font-size: 13px; color: var(--accent); background: rgba(88,166,255,.07);
+    border: 1px solid rgba(88,166,255,.22); border-radius: 7px; padding: 8px 11px;
+    word-break: break-all; line-height: 1.5; }
+  .kvc-f { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .note { background: rgba(210,153,34,.06); border: 1px solid rgba(210,153,34,.28);
+    border-radius: 10px; padding: 14px 16px; }
+  .note-h { font-size: 13px; font-weight: 600; color: #e3b341; margin-bottom: 9px; }
+  .note ul { margin: 0; padding-left: 17px; }
+  .note li { font-size: 12.5px; color: var(--muted); line-height: 1.75; margin-bottom: 5px; }
+  .note b { color: var(--txt); }
+  .note code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    background: rgba(139,148,158,.14); padding: 1px 5px; border-radius: 4px; }
+  .note-f { font-size: 12px; color: var(--dim); line-height: 1.65;
+    border-top: 1px solid rgba(210,153,34,.2); padding-top: 9px; margin-top: 4px; }
+  .warnbox { margin-top: 12px; font-size: 12.5px; line-height: 1.6; color: #e3b341;
+    background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.28);
+    border-radius: 8px; padding: 10px 13px; }
+
+  .codebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .sel { background: var(--bg); border: 1px solid var(--line2); color: var(--txt);
+    border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 12.5px; outline: none; max-width: 260px; }
+  .sel:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .langs { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 3px; }
+  .langs button { appearance: none; background: transparent; border: 0; color: var(--dim);
+    font: inherit; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 6px; cursor: pointer; }
+  .langs button:hover { color: var(--txt); }
+  .langs button[aria-pressed="true"] { background: rgba(88,166,255,.14); color: var(--accent); }
+  .code { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 15px 16px; overflow-x: auto; }
+  .code code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; line-height: 1.75; color: var(--txt); white-space: pre; }
+  .issue { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .issue input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 9px 12px; font-size: 13px; outline: none;
+    transition: border-color .15s, box-shadow .15s; }
+  .issue input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .keybox { background: rgba(63,185,80,.08); border: 1px solid rgba(63,185,80,.35);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .kwarn { font-size: 12px; color: var(--green); margin-bottom: 8px; }
+  .krow { display: flex; gap: 8px; align-items: center; }
+  .kval { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    color: var(--txt); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 10px; overflow-x: auto; white-space: nowrap; }
+  .panel-sep { margin: 20px 0 0; border-top: 1px solid var(--line); }
+  .kvc-n.ok { background: rgba(63,185,80,.16); color: var(--green); }
+  .g-u { color: var(--accent); }
+  /* Key issue form: two rows so checkboxes never get squished into vertical text.
+     Row 1 = identity + quota + expiry + action;  Row 2 = restrictions (IP, models, nolog). */
+  .issue-wrap { margin-bottom: 12px; }
+  .issue-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .issue-row:last-child { margin-bottom: 0; }
+  .issue-row input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 9px 12px; font-size: 13px; outline: none;
+    transition: border-color .15s, box-shadow .15s; }
+  .issue-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .quota-group { display: flex; gap: 6px; align-items: center; flex: 1 1 200px; }
+  .quota-group input { flex: 1; min-width: 0; }
+  .chk-label { flex: 0 0 auto; color: var(--txt-secondary); font-size: 13px;
+    display: flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer;
+    user-select: none; }
+  .chk-label input[type="checkbox"] { flex: none; width: auto; min-width: auto;
+    background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    appearance: auto; padding: 0; width: 15px; height: 15px; cursor: pointer; }
+  .issue-row-alt { opacity: .75; }
+  .issue-row-alt:hover { opacity: 1; }
+  /* datetime-local renders a dark-on-dark calendar glyph in dark UIs. */
+  .issue-row input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(.7); cursor: pointer; }
+
+  /* Quota bar: makes "how close am I to the ceiling" readable at a glance. */
+  .qbar { position: relative; height: 5px; border-radius: 3px; background: var(--line);
+    overflow: hidden; margin-top: 5px; }
+  .qbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--green); }
+  .qbar.warn i { background: var(--yellow); }
+  .qbar.full i { background: var(--red); }
+  .qtext { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .qtext .lim { color: var(--dim); }
+
+  .kpis4 { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 14px; }
+  @media (max-width: 1080px) { .kpis4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpis5 { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 14px; }
+  @media (max-width: 1080px) { .kpis5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 620px)  { .kpis5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .card.c-purple::before { background: var(--purple); }
+  .sub-head { display: flex; align-items: baseline; gap: 10px; margin: 22px 0 10px; }
+  .sub-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+
+  /* Playground */
+  .pg-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .pg-bar input { flex: 1 1 220px; min-width: 0; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 9px 12px; font-size: 13px; outline: none; }
+  .pg-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .pg-body { width: 100%; margin-top: 10px; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 12px; font-size: 12.5px; line-height: 1.7;
+    outline: none; resize: vertical; }
+  .pg-body:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .pg-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
+    margin: 10px 0; min-height: 18px; font-variant-numeric: tabular-nums; }
+
+  /* Channel manager */
+  .ch-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .ch-add input { flex: 1 1 160px; min-width: 0; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 8px; padding: 8px 11px; font-size: 13px; outline: none; }
+  .ch-add input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  .chip-sm { font-size: 11px; border-radius: 999px; padding: 1px 8px; background: var(--line); color: var(--muted); }
+  .chip-sm.ok { background: rgba(63,185,80,.16); color: var(--green); }
+  .chip-sm.bad { background: rgba(248,81,73,.16); color: var(--red); }
+  /* Inline numeric editors inside the channel table. */
+  input.mini { width: 64px; text-align: center; background: var(--bg); border: 1px solid var(--line2);
+    color: var(--txt); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; outline: none;
+    font-variant-numeric: tabular-nums; }
+  input.mini:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="mark">G</div>
+    <div>
+      <h1>API 中转站 · 监控台</h1>
+      <div class="sub">实时流量 / 缓存命中 / 限流拒绝 / 熔断状态</div>
+    </div>
+  </div>
+  <div class="status">
+    <span class="dot"></span><span>网关运行中</span>
+    <span class="sep">·</span><span id="uptime">-</span>
+    <span class="sep">·</span><span id="clock">-</span>
+    <span class="sep">·</span><span class="kbd-hint" title="快捷键：Alt+←/→ 循环切换页签，数字键 1-7 直达">⌥←→ 切页签</span>
+    <span class="sep">·</span><button type="button" class="lk" onclick="adminLogout()">退出</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="控制台分区">
+  <button type="button" class="tab" role="tab" data-tab="overview" aria-selected="true" aria-controls="pane-overview" title="Alt+←/→ 或数字键 1-7 切换页签">总览</button>
+  <button type="button" class="tab" role="tab" data-tab="routes" aria-selected="false" aria-controls="pane-routes">路由配置 <span class="n" id="n-routes">0</span></button>
+  <button type="button" class="tab" role="tab" data-tab="keys" aria-selected="false" aria-controls="pane-keys">API Keys <span class="n" id="n-keys">0</span></button>
+  <button type="button" class="tab" role="tab" data-tab="usage" aria-selected="false" aria-controls="pane-usage">用量看板</button>
+  <button type="button" class="tab" role="tab" data-tab="playground" aria-selected="false" aria-controls="pane-playground">调试台</button>
+  <button type="button" class="tab" role="tab" data-tab="logs" aria-selected="false" aria-controls="pane-logs">请求日志</button>
+  <button type="button" class="tab" role="tab" data-tab="guide" aria-selected="false" aria-controls="pane-guide">接入指南</button>
+</nav>
+
+<div class="connbar" id="connbar" role="alert">
+  与网关的连接中断，正在自动重试…数据可能不是最新
+</div>
+
+<div class="wrap">
+  <section class="tabpane on" data-pane="overview" id="pane-overview" role="tabpanel">
+  <div class="kpis">
+    <div class="card"><div class="label">总请求</div><div class="value" id="k-total">-</div></div>
+    <div class="card c-accent"><div class="label">当前 QPS</div><div class="value accent" id="k-qps">-</div></div>
+    <div class="card"><div class="label">平均 QPS (60s)</div><div class="value" id="k-avg">-</div></div>
+    <div class="card c-green"><div class="label">缓存命中率</div><div class="value green" id="k-cache">-</div></div>
+    <div class="card"><div class="label">限流拒绝率</div><div class="value" id="k-rej">-</div></div>
+    <div class="card c-red"><div class="label">错误率</div><div class="value" id="k-err">-</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="sec-head">
+      <h2>QPS 趋势</h2>
+      <div class="sec-sub">
+        <span style="color:var(--accent)">&#9632;</span> 总 QPS
+        &nbsp;<span style="color:var(--green)">&#9632;</span> 缓存命中
+        &nbsp;<span style="color:var(--red)">&#9632;</span> 限流拒绝
+        &nbsp;· 最近 60 秒
+      </div>
+    </div>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="sec-head">
+      <h2>熔断器状态</h2>
+      <div class="sec-sub">连续失败 5 次即开路 10s</div>
+    </div>
+    <div class="badges" id="circuits"><span class="updated">加载中…</span></div>
+  </div>
+  </section>
+
+  <section class="tabpane" data-pane="routes" id="pane-routes" role="tabpanel">
+  <div class="panel">
+    <div class="sec-head">
+      <h2>配置下游 API / 模型提供商</h2>
+      <div class="sec-sub">保存后热生效，无需重启</div>
+    </div>
+    <form id="route-form" onsubmit="return false;">
+      <div class="form-grid">
+        <div class="field full">
+          <label>Base URL <span class="tip">· 真实下游地址，唯一必填</span></label>
+          <input type="text" id="f-base" name="base_url" placeholder="https://open.bigmodel.cn/api/paas/v4" oninput="formState['base_url']=this.value.trim()" />
+        </div>
+        <div class="field">
+          <label>API 格式</label>
+          <select id="f-format" name="api_format" onchange="formState['api_format']=this.value" oninput="formState['api_format']=this.value">
+            <option value="openai-chat">Chat Completions (/chat/completions)</option>
+            <option value="anthropic-messages">Anthropic Messages (/v1/messages)</option>
+            <option value="openai-responses">Responses (/responses)</option>
+            <option value="generic">Generic (通用透传)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>对外匹配前缀 <span class="tip">· 留空自动分配</span></label>
+          <input type="text" id="f-prefix" name="match_path" placeholder="/v1/chat/completions" oninput="formState['match_path']=this.value.trim()" />
+        </div>
+        <div class="field full">
+          <label>API Key <span class="tip">· 下游提供商密钥，网关代持，用户不可见</span></label>
+          <div class="pw-wrap">
+            <input type="password" id="f-dskey" name="downstream_auth_key" placeholder="输入下游 API Key..." oninput="formState['downstream_auth_key']=this.value.trim()" />
+            <button type="button" class="pw-toggle" onclick="togglePW()" id="pw-eye">&#128065;</button>
+          </div>
+        </div>
+        <div class="field full">
+          <label>模型列表 <span class="tip">· 用户可调用的模型 ID</span></label>
+          <div class="model-tags" id="model-list"></div>
+          <div class="model-input-wrap">
+            <input type="text" id="f-model-input" placeholder="例如 GLM-5.3-Flash" onkeydown="if(event.key==='Enter'){event.preventDefault();addModel();}" />
+            <button type="button" class="btn-sm" onclick="addModel()">+ 添加模型</button>
+          </div>
+        </div>
+        <div class="field full">
+          <div class="form-grid cols4">
+            <div class="field">
+              <label>每 Key 限流 <span class="tip">· RPS</span></label>
+              <input type="number" id="f-rps" name="upstream_rps" value="50" min="1" oninput="formState['upstream_rps']=this.value.trim()" />
+            </div>
+            <div class="field">
+              <label>缓存 TTL <span class="tip">· 秒</span></label>
+              <input type="number" id="f-ttl" name="cache_ttl" value="30" min="0" oninput="formState['cache_ttl']=this.value.trim()" />
+            </div>
+            <div class="field">
+              <label>熔断</label>
+              <div style="display:flex;align-items:center;height:37px;">
+                <label style="color:var(--txt);font-size:13px;margin:0;"><input type="checkbox" id="f-cb" name="cb_enabled" checked onchange="formState['cb_enabled']=this.checked" /> 启用</label>
+              </div>
+            </div>
+            <div class="field">
+              <label>缓存归属 <span class="tip">· GET 响应</span></label>
+              <select id="f-scope" name="cache_scope" onchange="formState['cache_scope']=this.value">
+                <option value="global">全局共享（省上游调用）</option>
+                <option value="key">按 Key 隔离（响应含用户数据时必选）</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" id="f-save" onclick="saveRoute(this)">添加</button>
+        <button type="button" class="btn ghost" id="f-cancel" onclick="resetForm()" style="display:none;">取消编辑</button>
+        <span class="err" id="f-err"></span>
+      </div>
+      <div class="hint">
+        配置后用户只需带自己的 <b>X-API-Key</b> 即可调用该模型，网关自动注入下游 Key 并转发响应。
+        匹配前缀就是用户 URI 里的路径（<code>网关地址 + 前缀</code>），<b>可留空</b>——留空时按 /&lt;名称&gt; 自动分配并避让重名。
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+      <div class="sec-head">
+        <h2>路由表</h2>
+        <div class="sec-sub">用户 URI 前缀 → 真实下游（一条路由可挂多个渠道）</div>
+      </div>
+      <table>
+        <thead><tr><th>名称</th><th>前缀</th><th>API 格式</th><th>下游</th><th class="center">密钥</th><th>模型</th><th>RPS</th><th class="center">渠道</th><th>操作</th></tr></thead>
+        <tbody id="routes"><tr><td colspan="9"><span class="sk-bar" style="width:62%"></span></td></tr>
+        <tr><td colspan="9"><span class="sk-bar" style="width:84%"></span></td></tr>
+        <tr><td colspan="9"><span class="sk-bar" style="width:47%"></span></td></tr></tbody>
+      </table>
+  </div>
+
+  <div class="panel" id="ch-panel" style="display:none;">
+      <div class="sec-head">
+        <h2>渠道管理 · <span id="ch-title" class="mono"></span></h2>
+        <div class="sec-sub">优先级数字越小越先尝试；同优先级内按权重比例分流。上游 5xx / 429 自动切下一个渠道。</div>
+      </div>
+      <table>
+        <thead><tr><th>名称</th><th>Base URL</th><th class="center">优先级</th><th class="center">权重</th><th class="center">启用</th><th class="center">熔断</th><th>操作</th></tr></thead>
+        <tbody id="ch-list"></tbody>
+      </table>
+      <div class="ch-add">
+        <input type="text" id="ch-name" placeholder="渠道名（留空自动取域名）" />
+        <input type="text" id="ch-url" class="mono" placeholder="https://api.example.com/v1" />
+        <input type="password" id="ch-key" placeholder="该渠道的 API Key（可选）" />
+        <input type="number" id="ch-pri" placeholder="优先级" min="0" style="width:88px" />
+        <input type="number" id="ch-w" placeholder="权重" min="1" style="width:88px" />
+        <button type="button" class="btn" onclick="addChannel()">添加渠道</button>
+        <button type="button" class="btn ghost" onclick="closeChannels()">收起</button>
+      </div>
+      <div class="hint" id="ch-hint"></div>
+  </div>
+  </section>
+
+  <section class="tabpane" data-pane="keys" id="pane-keys" role="tabpanel">
+    <div class="panel">
+      <div class="sec-head">
+        <h2>API Keys</h2>
+        <button type="button" class="btn" onclick="openIssueDialog()">＋ 签发新 Key</button>
+      </div>
+      <div class="sec-sub" style="margin-bottom:12px">用户侧凭据 · 支持配额、过期时间与来源 IP 限制</div>
+      <table>
+        <thead><tr><th>ID</th><th>Owner</th><th>状态</th><th>配额用量</th><th>过期时间</th><th>访问限制</th><th>操作</th></tr></thead>
+        <tbody id="keys"><tr><td colspan="7"><span class="sk-bar" style="width:58%"></span></td></tr>
+        <tr><td colspan="7"><span class="sk-bar" style="width:76%"></span></td></tr>
+        <tr><td colspan="7"><span class="sk-bar" style="width:40%"></span></td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tabpane" data-pane="usage" id="pane-usage" role="tabpanel">
+    <div class="panel">
+      <div class="sec-head">
+        <h2>用量看板</h2>
+        <div class="sec-sub">
+          统计区间
+          <select id="u-hours" class="sel" onchange="refreshUsage()">
+            <option value="1">最近 1 小时</option>
+            <option value="24" selected>最近 24 小时</option>
+            <option value="168">最近 7 天</option>
+            <option value="720">最近 30 天</option>
+          </select>
+        </div>
+      </div>
+      <div class="kpis kpis4">
+        <div class="card"><div class="label">请求数</div><div class="value" id="u-req">-</div></div>
+        <div class="card c-accent"><div class="label">总 Token</div><div class="value accent" id="u-tok">-</div></div>
+        <div class="card c-purple"><div class="label">输入 / 输出</div><div class="value" id="u-io">-</div></div>
+        <div class="card c-red"><div class="label">错误请求</div><div class="value" id="u-err">-</div></div>
+      </div>
+      <!-- Speed row. TTFT/throughput are averaged only over streamed requests
+           that actually reported them, so the count is shown alongside to make
+           it clear what the average covers. -->
+      <div class="kpis kpis5">
+        <div class="card c-accent"><div class="label">平均首 token</div>
+          <div class="value accent" id="u-ttft">-</div>
+          <div class="sub2" id="u-ttft-sub">-</div></div>
+        <div class="card"><div class="label">P95 首 token</div>
+          <div class="value" id="u-ttft95">-</div>
+          <div class="sub2">流式请求 <span id="u-stream">0</span> 条</div></div>
+        <div class="card c-purple"><div class="label">平均吞吐</div>
+          <div class="value purple" id="u-tps">-</div>
+          <div class="sub2">tok/s · 不含首 token 等待</div></div>
+        <div class="card"><div class="label">平均总耗时</div>
+          <div class="value" id="u-lat">-</div>
+          <div class="sub2">P95 <span id="u-lat95">-</span></div></div>
+        <div class="card c-green"><div class="label" title="输入 token 中由上游前缀缓存命中的比例。命中部分按折扣计费，这是决定实际账单的数字。">输入缓存命中率</div>
+          <div class="value green" id="u-cache">-</div>
+          <div class="sub2" id="u-cache-sub">-</div></div>
+      </div>
+      <div class="sub-head"><h3>按 API Key</h3><span class="muted">按 token 消耗排序</span></div>
+      <table>
+        <thead><tr><th>Key ID</th><th>Owner</th><th>请求数</th><th>输入</th><th>输出</th><th>总 Token</th><th>错误</th></tr></thead>
+        <tbody id="u-bykey"><tr><td colspan="7"><span class="sk-bar" style="width:66%"></span></td></tr>
+        <tr><td colspan="7"><span class="sk-bar" style="width:44%"></span></td></tr></tbody>
+      </table>
+      <div class="sub-head"><h3>按模型</h3><span class="muted">首 token、吞吐、输入缓存命中率是选型时最该看的三列</span></div>
+      <table>
+        <thead><tr><th>模型</th><th>请求数</th><th>总 Token</th><th>平均首 token</th><th>平均吞吐</th><th title="输入 token 中由上游前缀缓存命中的比例。命中部分按折扣计费，这一列直接决定同价位模型的实际成本。">输入缓存命中</th><th>占比</th></tr></thead>
+        <tbody id="u-bymodel"><tr><td colspan="7"><span class="sk-bar" style="width:72%"></span></td></tr>
+        <tr><td colspan="7"><span class="sk-bar" style="width:50%"></span></td></tr></tbody>
+      </table>
+      <div class="sub-head"><h3>按日期</h3></div>
+      <table>
+        <thead><tr><th>日期</th><th>请求数</th><th>总 Token</th><th>占比</th></tr></thead>
+        <tbody id="u-byday"><tr><td colspan="4"><span class="sk-bar" style="width:56%"></span></td></tr>
+        <tr><td colspan="4"><span class="sk-bar" style="width:38%"></span></td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tabpane" data-pane="playground" id="pane-playground" role="tabpanel">
+    <div class="panel">
+      <div class="sec-head">
+        <h2>调试台</h2>
+        <div class="sec-sub">服务端直连上游，无需本地 curl</div>
+      </div>
+      <div class="warnbox" style="display:block;">
+        调试台<b>跳过鉴权、限流与配额</b>，也不会写入用量统计——它是给管理员排障用的，
+        不应拿它做压测或正式调用。
+      </div>
+      <div class="pg-bar">
+        <select id="p-route" class="sel" onchange="onPlaygroundRoute()"></select>
+        <input type="text" id="p-path" class="mono" placeholder="/v1/chat/completions" />
+        <select id="p-method" class="sel">
+          <option value="POST">POST</option>
+          <option value="GET">GET</option>
+          <option value="PUT">PUT</option>
+        </select>
+        <button type="button" class="btn" id="p-send" onclick="runPlayground()">发送</button>
+      </div>
+      <textarea id="p-body" class="pg-body mono" spellcheck="false" rows="10"></textarea>
+      <div class="pg-meta" id="p-meta"></div>
+      <pre class="code"><code id="p-out">选择一条路由后点击「发送」。</code></pre>
+    </div>
+  </section>
+
+  <section class="tabpane" data-pane="logs" id="pane-logs" role="tabpanel">
+  <div class="panel">
+    <div class="sec-head">
+      <h2>最近请求日志</h2>
+      <div class="sec-sub">最近 50 条，2 秒自动刷新</div>
+    </div>
+    <table>
+      <thead><tr><th>时间</th><th>方法</th><th>路径</th><th>上游</th><th>状态</th><th>延迟</th><th>首token</th><th>吞吐</th><th>模型</th><th>Token</th><th title="输入缓存：上游 prompt 前缀缓存命中率，命中部分按折扣计费。HIT 表示网关自身的响应缓存命中，此时请求根本没打到上游。">缓存</th><th>流式</th></tr></thead>
+      <tbody id="logs"><tr><td colspan="12"><span class="sk-bar" style="width:70%"></span></td></tr>
+      <tr><td colspan="12"><span class="sk-bar" style="width:88%"></span></td></tr>
+      <tr><td colspan="12"><span class="sk-bar" style="width:52%"></span></td></tr>
+      <tr><td colspan="12"><span class="sk-bar" style="width:64%"></span></td></tr></tbody>
+    </table>
+  </div>
+  </section>
+
+  <section class="tabpane" data-pane="guide" id="pane-guide" role="tabpanel">
+  <div class="panel">
+    <div class="sec-head">
+      <h2>用户接入：只要两样东西</h2>
+      <div class="sec-sub">把下面的地址和 Key 发给用户即可，用户看不到也拿不到你的下游密钥</div>
+    </div>
+    <div class="twocol">
+      <div class="kvcards">
+        <div class="kvc">
+          <div class="kvc-h"><span class="kvc-n">1</span>网关地址（Base URL）</div>
+          <div class="kvc-b mono" id="g-origin">-</div>
+          <div class="kvc-f" id="g-origin-note">所有用户共用，就是本控制台所在的地址</div>
+        </div>
+        <div class="kvc">
+          <div class="kvc-h"><span class="kvc-n">2</span>API Key</div>
+          <div class="kvc-b mono" id="g-key">gw-在「API Keys」页签签发</div>
+          <div class="kvc-f">每用户一把，放在 <code>X-API-Key</code> 请求头里</div>
+        </div>
+      </div>
+      <div class="note">
+        <div class="note-h">两把钥匙别搞混</div>
+        <ul>
+          <li><b>下游 Key</b>：你在「路由配置」里填的提供商密钥，<b>网关代持</b>，只存在服务端，永远不下发给用户。</li>
+          <li><b>用户 Key</b>：在「API Keys」页签签发、以 <code>gw-</code> 开头的那串，给用户本人用，可随时停用。</li>
+        </ul>
+        <div class="note-f">用户请求时，网关校验用户 Key → 匹配前缀 → 自动注入下游 Key → 转发 → 原样返回。</div>
+      </div>
+    </div>
+    <div class="panel-sep"></div>
+    <div class="sub-head">
+      <h3>两种接入方式</h3>
+      <span class="muted">推荐第一种：换模型即换供应商，客户端地址永远不变</span>
+    </div>
+    <div class="twocol">
+      <div class="kvc">
+        <div class="kvc-h"><span class="kvc-n ok">推荐</span>统一入口 · 按模型自动路由</div>
+        <div class="kvc-b mono" id="g-unified">-</div>
+        <div class="kvc-f">
+          任何 OpenAI 兼容客户端都直接填这个 Base URL，<b>不要再拼 /v1</b>。
+          网关读请求体里的 <code>model</code> 决定转发给哪个供应商；
+          换供应商只需改 model 名字，地址不动。<br>
+          <code>GET <span class="g-u">/v1/models</span></code> 可列出全部可用模型。
+        </div>
+      </div>
+      <div class="kvc">
+        <div class="kvc-h"><span class="kvc-n">备用</span>供应商专属前缀 · 强制指定渠道</div>
+        <div class="kvc-b mono" id="g-perroute">-</div>
+        <div class="kvc-f">
+          同一个模型在多个供应商都有时，用它锁定某一家；
+          或者你的客户端压根不支持自定义 Base URL。<br>
+          注意：这里<b>不要再自己加 /v1</b>，前缀已经指向具体的上游了。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="sec-head">
+      <h2>各模型的完整调用地址</h2>
+      <div class="sec-sub">网关地址 + 匹配前缀 + 接口路径，按你当前的路由实时生成</div>
+    </div>
+    <table>
+      <thead><tr><th>名称</th><th>完整 URI</th><th>可调用模型</th><th class="center">复制</th></tr></thead>
+      <tbody id="guide-uris"><tr><td colspan="4"><span class="sk-bar" style="width:60%"></span></td></tr></tbody>
+    </table>
+    <div class="hint" id="guide-empty" style="display:none;">
+      还没有配置任何下游路由。先去「路由配置」页签添加一条，这里会自动生成对应的调用地址。
+    </div>
+    <div class="warnbox" id="guide-dead" style="display:none;"></div>
+  </div>
+
+  <div class="panel">
+    <div class="sec-head">
+      <h2>代码示例</h2>
+      <div class="sec-sub">选一条路由和语言，复制即可用</div>
+    </div>
+    <div class="codebar">
+      <select id="g-route-sel" class="sel"></select>
+      <div class="langs" id="g-langs"></div>
+      <button type="button" class="btn-sm" id="g-copy" style="margin-left:auto;">复制代码</button>
+    </div>
+    <pre class="code"><code id="g-code">加载中…</code></pre>
+  </div>
+  </section>
+</div>
+
+<div class="mask" id="mask">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <h3 id="dlg-title">确认</h3>
+    <p id="dlg-msg"></p>
+    <div class="row">
+      <button type="button" class="btn ghost" id="dlg-no">取消</button>
+      <button type="button" class="btn" id="dlg-yes">确认</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- Issue-Key dialog: opens on "签发新 Key", holds the whole form, and shows
+     the one-time key result inside itself so it cannot be missed. -->
+<div class="mask" id="issue-mask">
+  <div class="dialog issue-dialog" role="dialog" aria-modal="true" aria-labelledby="issue-title">
+    <h3 id="issue-title">签发新 Key</h3>
+    <div id="issue-form-body">
+      <div class="fgroup"><label>Key 名称</label>
+        <input type="text" id="k-name" placeholder="如 我的笔记本 / CI 服务器"
+               oninput="formState['name']=this.value.trim()" /></div>
+      <div class="fgroup"><label>限额（token，留空 = 100 万）</label>
+        <div class="quota-group">
+          <input type="number" id="k-quota" placeholder="1000000" min="0" />
+          <label class="chk-label" title="不设上限：该 Key 不会因为用量耗尽而被 429 拒绝">
+            <input type="checkbox" id="k-quota-unlimited" onchange="toggleQuotaUnlimited(this.checked)" /> 不限
+          </label>
+        </div></div>
+    </div>
+    <div id="k-result" class="keybox" style="display:none;">
+      <div class="kwarn">新 Key 只显示这一次，请立即复制保存（服务端只存哈希，无法找回）。</div>
+      <div class="krow">
+        <code id="k-value" class="kval"></code>
+        <button type="button" class="btn-sm" onclick="copyKey()">复制</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button type="button" class="btn ghost" id="issue-cancel" onclick="closeIssueDialog()">取消</button>
+      <button type="button" class="btn" id="issue-submit" onclick="issueKey()">签发</button>
+    </div>
+  </div>
+</div>
+
+<!-- Login gate: shown whenever an admin API answers 403. Markup only — the
+     server never embeds a token in this page, so a leaked copy of it is
+     worthless. -->
+<div class="login-gate" id="login-gate" style="display:none;">
+  <form class="login-box" onsubmit="return adminLogin(event)">
+    <h2>管理控制台</h2>
+    <p class="login-sub">输入 ADMIN_TOKEN 登录。会话 7 天有效，凭据只存于 HttpOnly Cookie。</p>
+    <input type="password" id="login-token" placeholder="ADMIN_TOKEN" autocomplete="current-password" autofocus />
+    <button type="submit" class="btn" id="login-btn">登录</button>
+    <div class="login-err" id="login-err"></div>
+  </form>
+</div>
+
+<script>
+// No token ships in this page. The browser authenticates through
+// /admin/login, which sets an HttpOnly session cookie that these fetches
+// carry automatically; a 403 anywhere means "not logged in" and raises the
+// login gate. Scripts that prefer headers can still use X-Admin-Token.
+// Unified OpenAI-compatible entry point, baked in by the server. "" means the
+// operator turned it off, in which case only per-route prefixes are offered.
+const UNIFIED_PREFIX = "__UNIFIED_PREFIX__";
+const H = { "Content-Type": "application/json" };
+let allRoutes = [];
+
+/* ---------- toast (replaces alert) ---------- */
+var toastTimer = null;
+function toast(msg, kind) {
+  var t = document.getElementById("toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.className = "toast show" + (kind ? " " + kind : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.className = "toast" + (kind ? " " + kind : ""); }, 2800);
+}
+
+/* ---------- in-page confirm (replaces confirm) ----------
+   Returns a Promise<boolean>. Non-blocking for the page and for automation:
+   nothing here can hang the tab the way a native confirm() does. */
+var confirmResolve = null;
+function askConfirm(title, msg, okText, danger) {
+  return new Promise(function (resolve) {
+    confirmResolve = resolve;
+    document.getElementById("dlg-title").textContent = title || "确认";
+    document.getElementById("dlg-msg").textContent = msg || "";
+    var yes = document.getElementById("dlg-yes");
+    yes.textContent = okText || "确认";
+    yes.className = "btn" + (danger ? " danger" : "");
+    document.getElementById("mask").className = "mask on";
+    yes.focus();
+  });
+}
+function closeDialog(v) {
+  document.getElementById("mask").className = "mask";
+  if (confirmResolve) { var r = confirmResolve; confirmResolve = null; r(!!v); }
+}
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && confirmResolve) closeDialog(false);
+});
+// Bound via addEventListener rather than inline onclick: static markup can pass
+// through HTML sanitizers that drop inline handlers, which would silently
+// leave the dialog with no working buttons.
+(function bindDialog() {
+  var yes = document.getElementById("dlg-yes");
+  var no = document.getElementById("dlg-no");
+  var mask = document.getElementById("mask");
+  if (yes) yes.addEventListener("click", function () { closeDialog(true); });
+  if (no) no.addEventListener("click", function () { closeDialog(false); });
+  if (mask) mask.addEventListener("click", function (e) { if (e.target === mask) closeDialog(false); });
+})();
+
+/* ---------- tabs ----------
+   The tab is kept in location.hash so a reload (or a shared link) lands on the
+   same pane instead of bouncing back to the overview. */
+var activeTab = "overview";
+function switchTab(name, updateHash) {
+  var panes = document.querySelectorAll(".tabpane");
+  var found = false;
+  for (var i = 0; i < panes.length; i++) {
+    if (panes[i].getAttribute("data-pane") === name) { panes[i].className = "tabpane on"; found = true; }
+    else panes[i].className = "tabpane";
+  }
+  if (!found) name = "overview", document.querySelector('[data-pane="overview"]').className = "tabpane on";
+  var tabs = document.querySelectorAll(".tab");
+  for (var j = 0; j < tabs.length; j++) {
+    tabs[j].setAttribute("aria-selected", tabs[j].getAttribute("data-tab") === name ? "true" : "false");
+  }
+  activeTab = name;
+  if (updateHash !== false && location.hash !== "#" + name) {
+    history.replaceState(null, "", "#" + name);
+  }
+  // The pane was probably empty: paint it immediately instead of waiting up to
+  // 2s for the next polling tick.
+  if (!document.hidden && pollTimer !== null) refresh();
+}
+(function bindTabs() {
+  var tabs = document.querySelectorAll(".tab");
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener("click", function (e) {
+      switchTab(e.currentTarget.getAttribute("data-tab"), true);
+    });
+  }
+  window.addEventListener("hashchange", function () {
+    switchTab((location.hash || "#overview").slice(1), false);
+  });
+})();
+function isVisible(pane) {
+  return activeTab === pane || document.getElementById(pane) === null;
+}
+
+/* Row actions are delegated from <tbody>: the tables re-render every 2s, so
+   per-node handlers would be lost on each refresh. Delegation survives it and
+   keeps the markup free of inline onclick attributes. */
+document.addEventListener("click", function (e) {
+  var btn = e.target && e.target.closest ? e.target.closest("button.lk") : null;
+  if (!btn) return;
+  var id = parseInt(btn.getAttribute("data-id"), 10);
+  var act = btn.getAttribute("data-act");
+  if (act === "edit") editRoute(id);
+  else if (act === "del") deleteRoute(id);
+  else if (act === "toggle") toggleKey(id, parseInt(btn.getAttribute("data-status"), 10));
+  else if (act === "delkey") deleteKey(id, btn.getAttribute("data-owner") || "#" + id);
+  else if (act === "clearexp") clearKeyExpiry(id);
+  else if (act === "quota") setKeyQuota(id, parseInt(btn.getAttribute("data-limit"), 10) || 0);
+  else if (act === "copyuri") copyText(btn.getAttribute("data-uri"), "调用地址已复制");
+  else if (act === "ch") openChannels(id);
+  else if (act === "chdel") deleteChannel(id);
+  else if (act === "chtoggle") toggleChannel(id, btn.textContent.trim() === "启用");
+});
+
+(function bindGuide() {
+  var sel = document.getElementById("g-route-sel");
+  var cp = document.getElementById("g-copy");
+  if (sel) sel.addEventListener("change", renderGuideCode);
+  if (cp) cp.addEventListener("click", function () {
+    var code = document.getElementById("g-code");
+    copyText(code ? code.textContent : "", "代码已复制");
+  });
+})();
+let editingId = null;
+let editingModels = [];
+
+// Live form-state mirror. We deliberately do NOT rely on getElementById /
+// form.elements at save time: inside embedded preview panels (iframes) those
+// lookups have proven unreliable (they can resolve to the wrong document/element
+// and return stale values, e.g. the page URL instead of the input's value).
+// Instead every field writes its CURRENT value into formState via an inline
+// oninput handler bound to `this`, so saveRoute reads what the user actually
+// typed into THE field — no DOM lookup required, immune to context bugs.
+let formState = {
+  api_format: "openai-chat",
+  upstream_rps: "50",
+  cache_ttl: "30",
+  cb_enabled: true,
+  downstream_auth_key: "",
+  base_url: "",
+  match_path: ""
+};
+
+// Robust field tracking. We attach a single DELEGATED listener (capture phase)
+// on document for "input"/"change" and mirror every named control into formState
+// by e.target.name. This is immune to two preview-panel failure modes:
+//   1) sanitizers that strip/rewrite inline oninput attributes (e.g. when a
+//      field's placeholder contains characters like "*" that confuse the parser
+//      and cause the trailing oninput attribute to be dropped), and
+//   2) any context where getElementById/form.elements resolve to the wrong node.
+// Inline oninput attributes are kept as a belt-and-suspenders fallback.
+function onFieldEvent(e) {
+  var t = e.target;
+  if (!t || !t.name) return;
+  if (t.type === "checkbox") formState[t.name] = t.checked;
+  else formState[t.name] = (t.value || "").trim();
+}
+document.addEventListener("input", onFieldEvent, true);
+document.addEventListener("change", onFieldEvent, true);
+
+const FORMAT_LABELS = {
+  "openai-chat": "Chat Completions",
+  "anthropic-messages": "Anthropic Messages",
+  "openai-responses": "Responses",
+  "generic": "Generic"
+};
+
+/* The gateway does `upstream = base_url + TrimPrefix(path, match_prefix)`, so
+   the user-facing URI is always `origin + match_prefix + <provider's own path>`.
+   This map holds that trailing path per format — it is the piece users always
+   get wrong, so the guide spells it out instead of leaving them to guess. */
+const FORMAT_ENDPOINT = {
+  "openai-chat": "/chat/completions",
+  "anthropic-messages": "/v1/messages",
+  "openai-responses": "/responses",
+  "generic": ""
+};
+
+/* ---------- 接入指南 (user onboarding) ---------- */
+var guideLang = "curl";
+var guideRouteId = null;
+
+function guideEndpoint(r) {
+  return FORMAT_ENDPOINT[r.api_format] !== undefined ? FORMAT_ENDPOINT[r.api_format] : "";
+}
+function guideURI(r) {
+  return location.origin + r.match_prefix + guideEndpoint(r);
+}
+function guideModel(r) {
+  return (r.models && r.models.length) ? r.models[0] : "your-model-id";
+}
+
+const GUIDE_LANGS = {
+  curl: {
+    label: "cURL",
+    build: function (g) {
+      return 'curl ' + g.uri + ' \\\n' +
+        '  -H "X-API-Key: ' + g.key + '" \\\n' +
+        '  -H "Content-Type: application/json" \\\n' +
+        '  -d \'{\n' +
+        '    "model": "' + g.model + '",\n' +
+        '    "messages": [{"role": "user", "content": "你好"}]\n' +
+        '  }\'';
+    }
+  },
+  python: {
+    label: "Python",
+    build: function (g) {
+      return 'from openai import OpenAI\n\n' +
+        'client = OpenAI(\n' +
+        '    base_url="' + g.base + '",   # 网关地址 + 匹配前缀\n' +
+        '    api_key="' + g.key + '",     # 网关签发的 Key，不是下游的 Key\n' +
+        ')\n\n' +
+        'resp = client.chat.completions.create(\n' +
+        '    model="' + g.model + '",\n' +
+        '    messages=[{"role": "user", "content": "你好"}],\n' +
+        ')\n' +
+        'print(resp.choices[0].message.content)';
+    }
+  },
+  node: {
+    label: "Node.js",
+    build: function (g) {
+      return 'import OpenAI from "openai";\n\n' +
+        'const client = new OpenAI({\n' +
+        '  baseURL: "' + g.base + '",  // 网关地址 + 匹配前缀\n' +
+        '  apiKey: "' + g.key + '",    // 网关签发的 Key\n' +
+        '});\n\n' +
+        'const resp = await client.chat.completions.create({\n' +
+        '  model: "' + g.model + '",\n' +
+        '  messages: [{ role: "user", content: "你好" }],\n' +
+        '});\n' +
+        'console.log(resp.choices[0].message.content);';
+    }
+  },
+  client: {
+    label: "客户端配置",
+    build: function (g) {
+      return '# 粘贴到 Cherry Studio / NextChat / LobeChat 等 OpenAI 兼容客户端\n' +
+        '接口地址 (Base URL) : ' + g.base + '\n' +
+        'API Key            : ' + g.key + '\n' +
+        '模型名称 (Model)   : ' + g.model + '\n\n' +
+        '# 若是自定义请求头，加一条：\n' +
+        'X-API-Key          : ' + g.key;
+    }
+  }
+};
+
+function renderGuide() {
+  var origin = location.origin;
+  var oEl = document.getElementById("g-origin");
+  if (oEl) oEl.textContent = origin;
+
+  // Two ways to address the gateway. The unified one is what makes us drop-in
+  // compatible: the client's base_url never changes, the model name picks the
+  // provider. Only routes that declared a model allowlist can be reached that
+  // way, since routing is by model.
+  var unified = UNIFIED_PREFIX;
+  var uEl = document.getElementById("g-unified");
+  if (uEl) {
+    uEl.textContent = unified ? origin + unified : "未启用（UNIFIED_PREFIX=off）";
+  }
+  var pEl = document.getElementById("g-perroute");
+  if (pEl) {
+    var first = allRoutes[0];
+    pEl.textContent = first ? origin + first.match_prefix : "—";
+  }
+  var noteEl = document.getElementById("g-origin-note");
+  if (noteEl) {
+    noteEl.textContent = unified
+      ? "推荐用下面的「统一入口」，这个地址本身不直接调用"
+      : "所有用户共用，就是本控制台所在的地址";
+  }
+  var uTag = document.querySelector(".g-u");
+  if (uTag) uTag.textContent = unified || "/v1";
+
+  var tbody = document.getElementById("guide-uris");
+  var empty = document.getElementById("guide-empty");
+  if (!tbody) return;
+
+  if (!allRoutes.length) {
+    setRows("guide-uris", "");
+    if (empty) empty.style.display = "";
+    return;
+  }
+  if (empty) empty.style.display = "none";
+  // Never hand users a URI that can't be routed to: duplicate prefixes mean all
+  // but the first route are dead, and listing them would send people to a 404.
+  var dead = unreachableRoutes(allRoutes);
+  var live = allRoutes.filter(function (r) { return !dead[r.id]; });
+  var hidden = allRoutes.length - live.length;
+  var deadNote = document.getElementById("guide-dead");
+  if (deadNote) {
+    deadNote.style.display = hidden ? "" : "none";
+    deadNote.textContent = "已隐藏 " + hidden + " 条前缀重复、实际不可达的路由。请到「路由配置」页签把它们改成不同的前缀。";
+  }
+  setRows("guide-uris", live.map(function (r) {
+    var uri = guideURI(r);
+    var models = (r.models && r.models.length) ? r.models.join(", ") : "<span class='muted'>未限制</span>";
+    return "<tr>" +
+      "<td class='rname'>" + escapeHtml(r.name) + "</td>" +
+      "<td class='mono' style='max-width:340px;word-break:break-all;'>" + escapeHtml(uri) + "</td>" +
+      "<td class='muted' style='max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(models) + "'>" + models + "</td>" +
+      "<td class='center'><button type='button' class='lk' data-act='copyuri' data-uri='" + escapeHtml(uri) + "'>复制</button></td>" +
+      "</tr>";
+  }).join(""));
+
+  // Route picker for the code sample; keep the previous choice if it survives.
+  var sel = document.getElementById("g-route-sel");
+  if (sel) {
+    var ids = live.map(function (r) { return String(r.id); });
+    if (guideRouteId === null || ids.indexOf(String(guideRouteId)) < 0) guideRouteId = live[0].id;
+    sel.innerHTML = live.map(function (r) {
+      return "<option value='" + r.id + "'" + (r.id === guideRouteId ? " selected" : "") + ">" +
+        escapeHtml(r.name + "  " + r.match_prefix) + "</option>";
+    }).join("");
+  }
+  renderGuideCode();
+}
+
+function renderGuideCode() {
+  var sel = document.getElementById("g-route-sel");
+  if (sel && sel.value) guideRouteId = parseInt(sel.value, 10);
+  var dead = unreachableRoutes(allRoutes);
+  var live = allRoutes.filter(function (x) { return !dead[x.id]; });
+  var r = null;
+  for (var i = 0; i < live.length; i++) { if (live[i].id === guideRouteId) { r = live[i]; break; } }
+  if (!r) r = live[0];
+  if (!r) { document.getElementById("g-code").textContent = "还没有可用的路由"; return; }
+
+  var g = {
+    base: location.origin + r.match_prefix,
+    uri: guideURI(r),
+    key: "gw-你的Key",
+    model: guideModel(r)
+  };
+  var out = document.getElementById("g-code");
+  if (out) out.textContent = (GUIDE_LANGS[guideLang] || GUIDE_LANGS.curl).build(g);
+
+  var box = document.getElementById("g-langs");
+  if (box) {
+    box.innerHTML = "";
+    Object.keys(GUIDE_LANGS).forEach(function (k) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = GUIDE_LANGS[k].label;
+      b.setAttribute("aria-pressed", k === guideLang ? "true" : "false");
+      b.addEventListener("click", function () { guideLang = k; renderGuideCode(); });
+      box.appendChild(b);
+    });
+  }
+}
+
+function copyText(txt, okMsg) {
+  function done() { toast(okMsg || "已复制", "ok"); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done, function () { fallbackCopy(txt); });
+  } else {
+    fallbackCopy(txt);
+  }
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, { headers: H });
+  if (r.status === 403) { sessionLost(); throw new Error("not logged in"); }
+  if (!r.ok) throw new Error(url + " -> " + r.status);
+  return r.json();
+}
+
+/* ---------- login gate ----------
+
+   The page carries no credential: a 403 from any admin API means the session
+   cookie is missing or expired, and the gate goes up. Logging in posts the
+   token to /admin/login, which sets an HttpOnly cookie and reloads. */
+var pollTimer = null;
+
+function showLogin() {
+  var g = document.getElementById("login-gate");
+  if (!g) return;
+  g.style.display = "flex";
+  if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+  var inp = document.getElementById("login-token");
+  if (inp) inp.focus();
+}
+
+function sessionLost() {
+  if (document.getElementById("login-gate").style.display === "flex") return;
+  toast("会话已过期，请重新登录", "err");
+  showLogin();
+}
+
+async function adminLogin(ev) {
+  ev.preventDefault();
+  var btn = document.getElementById("login-btn");
+  var err = document.getElementById("login-err");
+  btn.disabled = true;
+  err.textContent = "";
+  try {
+    const r = await fetch("/admin/login", {
+      method: "POST", headers: H,
+      body: JSON.stringify({ token: document.getElementById("login-token").value })
+    });
+    if (r.status === 429) { err.textContent = "失败次数过多，请十分钟后再试"; return false; }
+    if (!r.ok) { err.textContent = "令牌不正确"; return false; }
+    location.reload();
+  } catch (e) {
+    err.textContent = "网络错误";
+  } finally {
+    btn.disabled = false;
+  }
+  return false;
+}
+
+async function adminLogout() {
+  try { await fetch("/admin/logout", { method: "POST", headers: H }); } catch (e) {}
+  location.reload();
+}
+
+/* Routes that can never receive traffic because an earlier route already claims
+   the exact same prefix. Matching is longest-prefix-first, so a short prefix no
+   longer swallows a longer one — an identical prefix is the only case left where
+   one route is silently dead. */
+function unreachableRoutes(list) {
+  var seen = {}, out = {};
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i].match_prefix || "";
+    if (!p) continue;
+    if (seen[p] !== undefined) out[list[i].id] = p;
+    else seen[p] = list[i].id;
+  }
+  return out;
+}
+
+function renderRouteTable() {
+  var shadowed = unreachableRoutes(allRoutes);
+  var rows = allRoutes.map(function (r) {
+    var modelsStr = (r.models && r.models.length) ? r.models.join(", ") : "—";
+    var fmtLabel = FORMAT_LABELS[r.api_format] || r.api_format;
+    var warn = shadowed[r.id]
+      ? "<span class='warnchip' title='前缀与前面某条路由完全相同，请求只会命中前面的那条，本条实际不可达，请改成不同的前缀'>前缀重复 " + escapeHtml(shadowed[r.id]) + "</span>"
+      : "";
+    var chs = r.channels || [];
+    var chBadge = chs.length > 1
+      ? "<span class='chip-sm'>" + (r.healthy_channels || 0) + "/" + chs.length + " 可用</span>"
+      : "<span class='muted'>1</span>";
+    // Per-key caching is the safe-but-slower choice; surface it so nobody
+    // wonders why a route is not sharing cached responses.
+    if (r.cache_scope === "key") {
+      warn += "<span class='warnchip' style='background:rgba(210,153,34,.16);color:var(--yellow);' " +
+        "title='该路由的 GET 缓存按 API Key 隔离，不跨用户共享'>缓存隔离</span>";
+    }
+    return "<tr>" +
+      "<td class='rname'>" + escapeHtml(r.name) + warn + "</td>" +
+      "<td><span class='chip'>" + escapeHtml(r.match_prefix) + "</span></td>" +
+      "<td><span class='fmt'>" + escapeHtml(fmtLabel) + "</span></td>" +
+      "<td class='mono muted' style='max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(r.base_url) + "'>" + escapeHtml(r.base_url) + "</td>" +
+      "<td class='center'>" + (r.has_downstream_key ? '<span style="color:var(--green)">✓</span>' : '<span class="muted">—</span>') + "</td>" +
+      "<td class='muted' style='max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(modelsStr) + "'>" + escapeHtml(modelsStr) + "</td>" +
+      "<td class='mono'>" + r.upstream_rps + "</td>" +
+      "<td class='center'>" + chBadge + "</td>" +
+      "<td class='ops'>" +
+      "<button type='button' class='lk' data-act='ch' data-id='" + r.id + "'>渠道</button>" +
+      "<button type='button' class='lk' data-act='edit' data-id='" + r.id + "'>编辑</button>" +
+      "<button type='button' class='lk danger' data-act='del' data-id='" + r.id + "'>删除</button>" +
+      "</td></tr>";
+  });
+  setRows("routes", rows.join("") || emptyRow(9, "还没有配置路由"));
+  if (chRouteId !== null) renderChannels();
+}
+
+function renderKeyTable(keys) {
+  var rows = keys.map(function (k) {
+    var limit = k.quota_limit || 0;
+    var used = k.quota_used || 0;
+    // limit <= 0 is the server's "unlimited" sentinel; show it as such instead
+    // of rendering a nonsense 0-width bar against a 0 ceiling.
+    var pctv = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+    var barCls = limit <= 0 ? "" : (pctv >= 100 ? " full" : (pctv >= 80 ? " warn" : ""));
+    var quotaCell = limit <= 0
+      ? "<div class='qtext'><span style='color:var(--green)'>" + used.toLocaleString() + "</span> <span class='lim'>· 不限</span></div>"
+      : pctv >= 100
+        ? "<div class='qtext' style='color:var(--red)'>" + used.toLocaleString() + " <span class='lim'>/ " + limit.toLocaleString() + "</span></div>" +
+          "<div class='qbar full' title='已超出 " + (used - limit).toLocaleString() + " token'><i style='width:100%'></i></div>"
+        : "<div class='qtext'>" + used.toLocaleString() + " <span class='lim'>/ " + limit.toLocaleString() + "</span></div>" +
+          "<div class='qbar" + barCls + "'><i style='width:" + pctv.toFixed(1) + "%'></i></div>";
+
+    var expCell = k.expires_at
+      ? "<span class='" + (k.expired ? "' style='color:var(--red)" : "muted") + "'>" +
+        shortDate(k.expires_at) + (k.expired ? " · 已过期" : "") + "</span>" +
+        "<br><button type='button' class='lk' data-act='clearexp' data-id='" + k.id + "'>改为永不过期</button>"
+      : "<span class='muted'>永不过期</span>";
+
+    var limits = [];
+    if (k.allowed_ips && k.allowed_ips.length) limits.push("IP: " + k.allowed_ips.join(", "));
+    if (k.allowed_models && k.allowed_models.length) limits.push("模型: " + k.allowed_models.join(", "));
+    var limCell = (limits.length
+      ? "<span class='muted' style='font-size:12px;'>" + escapeHtml(limits.join("<br>")) + "</span>"
+      : "<span class='muted'>—</span>") +
+      // Appended after the escaped block: limits may contain user-supplied
+      // text, this badge does not.
+      (k.no_log ? "<span class='warnchip' style='background:rgba(210,153,34,.16);color:var(--yellow);'" +
+        " title='测试 Key：请求不写入请求日志、审计与指标，但配额照常扣减'>不记日志</span>" : "");
+
+    // Name is the primary label when set — owner alone cannot tell two keys
+    // of the same person apart. Legacy keys have no name and fall back to owner.
+    var ownerCell = k.name
+      ? "<div>" + escapeHtml(k.name) + "</div><div class='muted' style='font-size:11px'>" + escapeHtml(k.owner) + "</div>"
+      : escapeHtml(k.owner);
+
+    return "<tr><td>" + k.id + "</td><td>" + ownerCell + "</td>" +
+      "<td>" + (k.status === 1 ? '<span style="color:var(--green)">启用</span>' : '<span class="muted">停用</span>') + "</td>" +
+      "<td style='min-width:150px'>" + quotaCell + "</td>" +
+      "<td>" + expCell + "</td>" +
+      "<td>" + limCell + "</td>" +
+      "<td class='ops'>" +
+      // Quota is the only policy with a meaningful numeric range, so it gets
+      // its own action rather than a toggle. data-limit seeds the prompt with
+      // the current ceiling.
+      "<button type='button' class='lk' data-act='quota' data-id='" + k.id +
+      "' data-limit='" + limit + "'>改配额</button>" +
+      "<button type='button' class='lk" + (k.status === 1 ? " danger" : " ok") +
+      "' data-act='toggle' data-id='" + k.id + "' data-status='" + k.status + "'>" +
+      (k.status === 1 ? "停用" : "启用") + "</button>" +
+      "<button type='button' class='lk danger' data-act='delkey' data-id='" + k.id +
+      "' data-owner='" + escapeHtml(k.owner) + "'>删除</button>" +
+      "</td></tr>";
+  });
+  setRows("keys", rows.join("") || emptyRow(7, "还没有签发 Key"));
+}
+
+function shortDate(s) {
+  // "2026-08-29T10:30:00Z" -> "08-29 10:30"
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  var p = function (n) { return n < 10 ? "0" + n : "" + n; };
+  return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+// Rebuild the playground's route picker without clobbering the user's current
+// selection (the table is re-fetched every 2s).
+function fillPlaygroundRoutes() {
+  var sel = document.getElementById("p-route");
+  if (!sel) return;
+  if (sel.options.length === 0 && allRoutes.length) {
+    allRoutes.forEach(function (r) {
+      var o = document.createElement("option");
+      o.value = r.id;
+      o.textContent = r.name + "  " + r.match_prefix;
+      sel.appendChild(o);
+    });
+    onPlaygroundRoute();
+  } else {
+    // Refresh labels in place so a renamed route does not leave stale text.
+    for (var i = 0; i < sel.options.length; i++) {
+      var r = allRoutes.find(x => String(x.id) === sel.options[i].value);
+      if (r) sel.options[i].textContent = r.name + "  " + r.match_prefix;
+    }
+  }
+}
+
+function fmtUptime(sec) {
+  sec = Math.max(0, sec | 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h + "h " + m + "m " + s + "s";
+}
+function shortTime(s) { /* RFC3339 (any zone) -> browser-local "HH:MM:SS" */
+  if (!s) return "-";
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return String(s).substring(0, 19);
+  var p = function (n) { return (n < 10 ? "0" : "") + n; };
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+function statusPill(code) {
+  if (code >= 500) return '<span class="pill err">' + code + "</span>";
+  if (code >= 400) return '<span class="pill warn">' + code + "</span>";
+  return '<span class="pill ok">' + code + "</span>";
+}
+
+// The server records a stable token naming the gate that refused a request.
+// These are the Chinese labels for it. An unmapped token still renders (as
+// itself) so a new server reason never shows up blank here.
+var REJECT_LABELS = {
+  quota: "配额用尽",
+  rate_upstream: "上游限流",
+  rate_key: "Key 限流",
+  rate_ip: "IP 限流",
+  no_key: "缺少凭据",
+  bad_key: "凭据无效",
+  expired: "Key 已过期",
+  ip_denied: "IP 不在白名单",
+  model_denied: "模型不在白名单",
+  no_route: "无匹配路由",
+  unknown_model: "未知模型",
+  no_model_allowlist: "无模型白名单",
+  no_model: "缺少 model",
+  bad_body: "请求体错误",
+  method: "方法不允许",
+  no_channel: "无可用渠道",
+  upstream: "上游失败"
+};
+
+function rejectChip(reason) {
+  if (!reason) return "";
+  var label = REJECT_LABELS[reason] || reason;
+  return "<span class='rej' title='拒绝原因：" + escapeHtml(reason) + "'>" +
+    escapeHtml(label) + "</span>";
+}
+
+/* ----- chart (unchanged) ----- */
+function drawChart(series, cached, rejected) {
+  const cv = document.getElementById("chart");
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, Hh = cv.clientHeight;
+  cv.width = W * dpr; cv.height = Hh * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, Hh);
+  const n = series.length;
+  let max = 1;
+  for (let i = 0; i < n; i++) { max = Math.max(max, series[i].count, cached[i].count, rejected[i].count); }
+  ctx.strokeStyle = "rgba(139,148,158,.18)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#8b949e";
+  ctx.font = "10px sans-serif";
+  for (let i = 0; i <= 4; i++) {
+    const y = (Hh - 20) * (i / 4) + 4;
+    ctx.beginPath(); ctx.moveTo(34, y); ctx.lineTo(W - 6, y); ctx.stroke();
+    ctx.fillText(String(Math.round(max * (1 - i / 4))), 4, y + 3);
+  }
+  const x0 = 34, plotW = W - 40, plotH = Hh - 24, y0 = Hh - 20;
+  const xs = function (i) { return x0 + (plotW * i) / Math.max(1, n - 1); };
+  const ys = function (v) { return y0 - (plotH * v) / max; };
+  const line = function (arr, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = xs(i), y = ys(arr[i].count);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  };
+  line(series, "#58a6ff");
+  line(cached, "#3fb950");
+  line(rejected, "#f85149");
+}
+
+/* ----- model tag list ----- */
+function renderModels() {
+  const el = document.getElementById("model-list");
+  el.innerHTML = editingModels.map(function (m, i) {
+    return '<span class="model-tag">' + escapeHtml(m) + ' <span class="rm" onclick="removeModel(' + i + ')">&times;</span></span>';
+  }).join("");
+}
+function addModel() {
+  const input = document.getElementById("f-model-input");
+  const val = input.value.trim();
+  if (!val) return;
+  if (editingModels.indexOf(val) === -1) { editingModels.push(val); renderModels(); }
+  input.value = "";
+}
+function removeModel(i) { editingModels.splice(i, 1); renderModels(); }
+
+/* ----- password toggle ----- */
+function togglePW() {
+  const fld = document.getElementById("f-dskey");
+  const eye = document.getElementById("pw-eye");
+  if (fld.type === "password") { fld.type = "text"; eye.textContent = "\u{1F441}\uFE0F"; }
+  else { fld.type = "password"; eye.textContent = "\u{1F441}"; }
+}
+
+/* ----- refresh dashboard ----- */
+async function refresh() {
+  try {
+    const m = await getJSON("/admin/metrics");
+    connOK();
+    document.getElementById("k-total").textContent = m.total.toLocaleString();
+    document.getElementById("k-qps").textContent = m.current_qps.toFixed(1);
+    document.getElementById("k-avg").textContent = m.avg_qps.toFixed(1);
+    document.getElementById("k-cache").textContent = m.cache_hit_rate.toFixed(1) + "%";
+    document.getElementById("k-rej").textContent = m.reject_rate.toFixed(1) + "%";
+    const errEl = document.getElementById("k-err");
+    errEl.textContent = m.error_rate.toFixed(1) + "%";
+    errEl.className = "value" + (m.error_rate > 0 ? " red" : "");
+    document.getElementById("uptime").textContent = fmtUptime(m.uptime_sec);
+
+    // drawChart measures the canvas; inside a display:none pane it measures 0
+    // and would repaint blank once the tab is shown again.
+    if (activeTab === "overview") {
+      drawChart(m.series, m.cached_series, m.reject_series);
+      const cb = document.getElementById("circuits");
+      const circ = m.circuits || {};
+      let badges = "";
+      for (const up in circ) {
+        const st = circ[up];
+        badges += "<span class='badge " + st + "'>" + escapeHtml(up) + ": " +
+          (st === "open" ? "已熔断" : "正常") + "</span>";
+      }
+      if (!badges) badges = "<span class='td-empty' style='padding:0'>暂无熔断器记录（还没有流量打到上游）</span>";
+      // Same change-guard as the tables: rebuilding the badges every tick
+      // would reset any hover state on them.
+      if (cb.dataset.html !== badges) { cb.dataset.html = badges; cb.innerHTML = badges; }
+    }
+  } catch (e) { console.warn(e); connFail(); }
+
+  try {
+    allRoutes = await getJSON("/admin/routes");
+    connOK();
+    var nRoutes = document.getElementById("n-routes");
+    if (nRoutes) nRoutes.textContent = allRoutes.length;
+    fillPlaygroundRoutes();
+    // Still fetched while hidden (small, and it keeps the tab badge live), but
+    // the table is only rebuilt when its pane is actually on screen.
+    if (activeTab === "routes") renderRouteTable();
+  } catch (e) { connFail(); }
+
+  // Keys are pulled on every tick (small, and it keeps the tab badge honest)
+  // but the table is only rebuilt while the pane is on screen. Logs, usage and
+  // the playground are the expensive ones, fetched only when their tab is open.
+  {
+    try {
+      const keys = await getJSON("/admin/keys");
+      connOK();
+      var nKeys = document.getElementById("n-keys");
+      if (nKeys) nKeys.textContent = keys.length;
+      if (activeTab === "keys") renderKeyTable(keys);
+    } catch (e) { connFail(); }
+  }
+
+  if (activeTab === "usage") refreshUsage();
+  if (activeTab === "playground") fillPlaygroundRoutes();
+
+  if (activeTab === "logs") {
+    try {
+      const logs = await getJSON("/admin/logs");
+      connOK();
+      // Rows that arrived since the last paint get a one-shot highlight so the
+      // eye can find what is new in a table that otherwise looks static.
+      var fresh = {};
+      for (var fi = 0; fi < logs.length; fi++) {
+        if (!seenLogIds[logs[fi].id]) fresh[logs[fi].id] = true;
+      }
+      // On the very first paint everything is "new", which would flash the
+      // whole table; treat the first fetch as baseline instead.
+      var firstLogPaint = !seenLogInit;
+      seenLogInit = true;
+      seenLogIds = {};
+      for (var si = 0; si < logs.length; si++) seenLogIds[logs[si].id] = true;
+
+      var logRows = logs.map(function (l) {
+        // TTFT: only meaningful for streaming. Show "—" for non-streaming,
+        // cache hits, and rejections that never reached an upstream.
+        var ttft = "";
+        if (l.is_stream && l.ttft_ms > 0) {
+          ttft = "<span class='mono'>" + l.ttft_ms + "ms</span>";
+        } else {
+          ttft = "<span class='muted'>—</span>";
+        }
+        // Throughput: tokens per second. Round to 1 decimal for readability.
+        var tps = "";
+        if (l.tokens_per_sec > 0) {
+          tps = "<span class='mono'>" + Number(l.tokens_per_sec).toFixed(1) + "</span>";
+        } else {
+          tps = "<span class='muted'>—</span>";
+        }
+        // Token breakdown: show prompt/completion/total when any is non-zero.
+        var tok = "";
+        if (l.total_tokens > 0 || l.prompt_tokens > 0 || l.completion_tokens > 0) {
+          tok = (l.prompt_tokens > 0 ? l.prompt_tokens : "—") +
+            " / " + (l.completion_tokens > 0 ? l.completion_tokens : "—") +
+            " / <b>" + (l.total_tokens > 0 ? l.total_tokens : "—") + "</b>";
+        } else {
+          tok = "<span class='muted'>—</span>";
+        }
+        // Model name, truncated to avoid breaking layout.
+        var model = l.model ? ("<span title='" + escapeHtml(l.model) + "'>" +
+          escapeHtml(l.model.length > 16 ? l.model.slice(0, 15) + "…" : l.model) + "</span>")
+          : "<span class='muted'>—</span>";
+
+        // Cache column. Two different caches can land here and they are never
+        // both set: a gateway response-cache hit means the request never
+        // reached an upstream at all, so there is no provider cache data.
+        //
+        // For everything else the number shown is the share of *input* tokens
+        // the provider served from its own prefix cache. That is the figure
+        // that decides what a chat request costs, because cached input is
+        // billed at a fraction of the normal rate. A request with a prompt but
+        // no hits is a genuine cold call, not missing data, so it is rendered
+        // as 0% rather than as a dash.
+        var cache = "";
+        if (l.cached) {
+          cache = '<span class="warnchip" style="background:rgba(63,177,80,.16);color:var(--green);">HIT</span>';
+        } else if (l.prompt_tokens > 0) {
+          var hit = l.prompt_cache_hit_tokens || 0;
+          var cpct = Math.round((hit / l.prompt_tokens) * 100);
+          var ccol = cpct >= 50 ? "var(--green)" : (cpct > 0 ? "var(--yellow)" : "var(--red)");
+          cache = "<span class='mono' style='color:" + ccol + ";white-space:nowrap' title='输入 " +
+            hit.toLocaleString() + " / " + l.prompt_tokens.toLocaleString() +
+            " token 命中上游前缀缓存'>" + cpct + "%" +
+            (hit > 0 ? " <span style='opacity:.65'>" + compactNum(hit) + "</span>" : "") + "</span>";
+        } else {
+          cache = "<span class='muted'>—</span>";
+        }
+
+        return "<tr" + (!firstLogPaint && fresh[l.id] ? " class='log-new'" : "") + ">" +
+          "<td class='mono muted' style='white-space:nowrap'>" + shortTime(l.created_at) + "</td>" +
+          "<td><span class='method'>" + escapeHtml(l.method) + "</span></td>" +
+          "<td class='mono' style='max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(l.path) + "'>" + escapeHtml(l.path) + "</td>" +
+          "<td class='muted' style='max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(l.upstream || "") + "'>" + escapeHtml(l.upstream || "-") + "</td>" +
+          "<td>" + statusPill(l.status_code) + rejectChip(l.reject_reason) + "</td>" +
+          "<td class='mono'>" + l.latency_ms + "ms</td>" +
+          "<td>" + ttft + "</td>" +
+          "<td>" + tps + "</td>" +
+          "<td style='max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>" + model + "</td>" +
+          "<td class='mono' style='font-size:12px;white-space:nowrap'>" + tok + "</td>" +
+          "<td>" + cache + "</td>" +
+          "<td>" + (l.is_stream ? '<span style="color:var(--purple)">SSE</span>' : '<span class="muted">—</span>') + "</td>" +
+          "</tr>";
+      }).join("");
+      setRows("logs", logRows || emptyRow(12, "该区间内没有请求"));
+    } catch (e) {
+      connFail();
+      showSkeleton("logs", 12, 4);
+    }
+  }
+
+  // The guide is derived entirely from the route list, so it needs no request of
+  // its own — just a re-render whenever the routes change.
+  if (activeTab === "guide") renderGuide();
+
+  updateClock();
+}
+
+function updateClock() {
+  var c = document.getElementById("clock");
+  if (c) c.textContent = new Date().toLocaleTimeString();
+}
+
+/* ----- save / edit / delete / reset ----- */
+function escapeHtml(s) { /* basic XSS guard for user-provided strings */
+  var d = document.createElement("div"); d.textContent = s; return d.innerHTML;
+}
+
+// Turn a raw server error into an actionable message.
+// Only base_url is hard-required (no upstream => nowhere to forward).
+// match_path is optional: the server auto-assigns "/<name>" when blank.
+function explainSaveError(status, body) {
+  if (status === 400 && /missing required field|required/.test(body)) {
+    return "无法保存：Base URL（下游地址）缺失。没有下游地址网关无处转发。" +
+      "匹配前缀可以留空，网关会自动按 /<名称> 分配，保存后可随时编辑修改。";
+  }
+  return "保存失败: " + status + " " + body;
+}
+
+/* Busy-state helper: while a button's request is in flight it is disabled and
+   its label says what is happening (with a spinner on .btn), so a slow save
+   never invites a double-click that fires the mutation twice. */
+function withBusy(btn, busyText, fn) {
+  if (!btn) return fn();
+  if (btn.disabled) return Promise.resolve();
+  var orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyText;
+  if (btn.classList.contains("btn")) btn.classList.add("busy");
+  return Promise.resolve()
+    .then(fn)
+    .then(function (v) { btn.disabled = false; btn.textContent = orig; btn.classList.remove("busy"); return v; })
+    .catch(function (e) { btn.disabled = false; btn.textContent = orig; btn.classList.remove("busy"); throw e; });
+}
+
+async function saveRoute(btn) {
+  const errEl = document.getElementById("f-err");
+  errEl.textContent = "";
+  errEl.style.color = "";
+  return withBusy(btn, "保存中…", async function () {
+  try {
+    // Multi-source read with fallbacks: formState (event-driven, most reliable)
+    // -> the live form element -> a global name query. Whichever source sees
+    // the typed value wins. match_path may legitimately be empty: the server
+    // auto-assigns a prefix, so a lost/blank field can never block the save.
+    function readField(name) {
+      var v = formState[name];
+      if (v) return v;
+      try {
+        var f = document.getElementById("route-form");
+        if (f) { var el = f.elements[name]; if (el && el.value) return el.value.trim(); }
+      } catch (e) {}
+      try {
+        var g = document.querySelector('[name="' + name + '"]');
+        if (g && g.value) return g.value.trim();
+      } catch (e) {}
+      return "";
+    }
+    const payload = {
+      name: "", // server derives a clean name from the base_url hostname
+      base_url: readField("base_url"),
+      match_path: readField("match_path"),
+      upstream_rps: parseInt(readField("upstream_rps"), 10) || 50,
+      cache_ttl: parseInt(readField("cache_ttl"), 10) || 30,
+      cb_enabled: formState.cb_enabled !== false,
+      api_format: readField("api_format") || "openai-chat",
+      downstream_auth_key: readField("downstream_auth_key"),
+      models: editingModels.slice(),
+      cache_scope: readField("cache_scope") === "key" ? "key" : "global"
+    };
+
+    let url = "/admin/routes", method = "POST";
+    if (editingId !== null) { url += "?id=" + editingId; method = "PUT"; }
+    const r = await fetch(url, { method: method, headers: H, body: JSON.stringify(payload) });
+    if (!r.ok) {
+      var dbg = " [debug: base=" + JSON.stringify(payload.base_url) + " prefix=" + JSON.stringify(payload.match_path) + "]";
+      errEl.textContent = explainSaveError(r.status, await r.text()) + dbg;
+      return;
+    }
+    const resp = await r.json().catch(function () { return {}; });
+    resetForm();
+    refresh();
+    if (resp && resp.match_path) {
+      errEl.style.color = "var(--green)";
+      errEl.textContent = payload.match_path
+        ? "已保存 ✓ 匹配前缀：" + resp.match_path
+        : "已保存 ✓ 匹配前缀自动分配为 " + resp.match_path + "（可点路由表中的「编辑」修改）";
+    }
+  } catch (e) {
+    console.error("[saveRoute] exception:", e);
+    errEl.textContent = "保存异常: " + (e && e.message ? e.message : String(e));
+  }
+  });
+}
+
+function editRoute(id) {
+  const r = allRoutes.find(function (x) { return x.id === id; });
+  if (!r) return;
+  editingId = id;
+  document.getElementById("f-base").value = r.base_url;
+  document.getElementById("f-prefix").value = r.match_prefix;
+  document.getElementById("f-format").value = r.api_format || "generic";
+  document.getElementById("f-rps").value = r.upstream_rps;
+  document.getElementById("f-ttl").value = r.cache_ttl;
+  document.getElementById("f-cb").checked = r.cb_enabled;
+  document.getElementById("f-scope").value = r.cache_scope === "key" ? "key" : "global";
+  document.getElementById("f-dskey").value = ""; // never expose key back for security
+  editingModels = (r.models && r.models.length) ? r.models.slice() : [];
+  renderModels();
+  // Mirror into formState so the save path (which reads formState, not the DOM)
+  // reflects the loaded record even though programmatic .value assignment does
+  // not fire the inline oninput handlers.
+  formState = {
+    api_format: r.api_format || "generic",
+    upstream_rps: String(r.upstream_rps),
+    cache_ttl: String(r.cache_ttl),
+    cache_scope: r.cache_scope === "key" ? "key" : "global",
+    cb_enabled: r.cb_enabled,
+    downstream_auth_key: "",
+    base_url: r.base_url,
+    match_path: r.match_prefix
+  };
+  document.getElementById("f-save").textContent = "保存修改";
+  document.getElementById("f-cancel").style.display = "";
+  document.getElementById("f-err").textContent = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function deleteRoute(id) {
+  const ok = await askConfirm("删除下游 API 路由", "该路由删除后，用户将立即无法通过对应前缀访问此模型。此操作不可撤销。", "删除", true);
+  if (!ok) return;
+  try {
+    const r = await fetch("/admin/routes?id=" + id, { method: "DELETE", headers: H });
+    if (!r.ok) { toast("删除失败: " + r.status, "err"); return; }
+    toast("路由已删除", "ok");
+    refresh();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+/* ----- API key issuance / revocation ----- */
+
+// "No ceiling" and "a ceiling of 100000" are different things, but an empty
+// number box cannot say which one is meant. The checkbox resolves it: ticking
+// it greys out the number field and makes issueKey send an explicit 0, which
+// is the value mwQuota already treats as unlimited.
+function toggleQuotaUnlimited(on) {
+  var el = document.getElementById("k-quota");
+  if (!el) return;
+  el.disabled = !!on;
+  if (on) el.value = "";
+}
+
+/* ---------- issue-key dialog ---------- */
+function openIssueDialog() {
+  var m = document.getElementById("issue-mask");
+  if (!m) return;
+  m.classList.add("on");
+  // Fresh form every time the dialog opens; the one-time key from the last
+  // issue must not survive into the next.
+  document.getElementById("issue-form-body").style.display = "";
+  document.getElementById("k-result").style.display = "none";
+  var submit = document.getElementById("issue-submit");
+  submit.textContent = "签发"; submit.disabled = false;
+  document.getElementById("k-name").value = "";
+  document.getElementById("k-quota").value = "";
+  document.getElementById("k-quota-unlimited").checked = false;
+  toggleQuotaUnlimited(false);
+  formState.name = "";
+  document.getElementById("k-name").focus();
+}
+
+function closeIssueDialog() {
+  var m = document.getElementById("issue-mask");
+  if (m) m.classList.remove("on");
+  refresh();
+}
+
+async function issueKey() {
+  const box = document.getElementById("k-result");
+  // The name is the whole identity now: it doubles as owner, so the list
+  // stays readable without a separate "归属" field.
+  var name = (document.getElementById("k-name").value || "").trim();
+  if (!name) { toast("请填写 Key 名称", "err"); return; }
+  var limRaw = (document.getElementById("k-quota").value || "").trim();
+  var lim = parseInt(limRaw, 10);
+  var unlimitedEl = document.getElementById("k-quota-unlimited");
+  var unlimited = !!(unlimitedEl && unlimitedEl.checked);
+
+  var payload = { owner: name, name: name };
+  // quota_limit is sent whenever the user stated an intent. A blank box with
+  // the box unticked falls through to the server's 100000 default. 0 is the
+  // server-side "unlimited" sentinel, so both the checkbox and a hand-typed
+  // 0 land on it.
+  if (unlimited) {
+    payload.quota_limit = 0;
+  } else if (limRaw !== "" && !isNaN(lim)) {
+    if (lim < 0) { toast("限额不能为负；不限请勾选「不限」", "err"); return; }
+    payload.quota_limit = lim;
+  }
+
+  return withBusy(document.getElementById("issue-submit"), "签发中…", async function () {
+  try {
+    const r = await fetch("/admin/keys", {
+      method: "POST", headers: H, body: JSON.stringify(payload)
+    });
+    if (!r.ok) { toast("签发失败: " + r.status + " " + (await r.text()), "err"); return; }
+    const resp = await r.json();
+    document.getElementById("k-value").textContent = resp.api_key || "";
+    // Swap the form for the one-time key: it is the only thing that matters
+    // now, and "取消" becomes "完成" so closing is obviously safe.
+    document.getElementById("issue-form-body").style.display = "none";
+    box.style.display = "";
+    document.getElementById("issue-submit").style.display = "none";
+    document.getElementById("issue-cancel").textContent = "完成";
+    refresh();
+  } catch (e) { toast("签发异常: " + (e && e.message ? e.message : String(e)), "err"); }
+  });
+}
+
+function splitCsv(v) {
+  return String(v || "").split(",").map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0; });
+}
+
+function copyKey() {
+  const txt = document.getElementById("k-value").textContent || "";
+  if (!txt) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(function () {
+      document.getElementById("k-value").textContent = txt + "  ✓ 已复制";
+    }, function () { fallbackCopy(txt); });
+  } else { fallbackCopy(txt); }
+}
+function fallbackCopy(txt) {
+  var ta = document.createElement("textarea");
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  document.body.removeChild(ta);
+}
+
+async function toggleKey(id, status) {
+  const off = status === 1;
+  const ok = await askConfirm(off ? "停用 API Key" : "启用 API Key",
+    off ? "停用后，持有这把 Key 的用户将立即收到 401，且不受缓存影响。" : "启用后，这把 Key 将立刻恢复可用。",
+    off ? "停用" : "启用", off);
+  if (!ok) return;
+  try {
+    const r = await fetch("/admin/keys?id=" + id, {
+      method: "PUT", headers: H, body: JSON.stringify({ status: off ? 0 : 1 })
+    });
+    if (!r.ok) { toast("操作失败: " + r.status, "err"); return; }
+    toast(off ? "Key 已停用，用户将立即 401" : "Key 已启用", "ok");
+    refresh();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+// Deleting is the hard removal; disabling (above) is the reversible one. The
+// request logs keep referencing a key id that no longer resolves, which is why
+// the usage dashboard labels those "(deleted)".
+async function deleteKey(id, owner) {
+  const ok = await askConfirm("删除 API Key",
+    "将永久删除 " + owner + " 的 Key（#" + id + "），无法恢复。\n只是想临时禁用请改用「停用」。",
+    "永久删除", true);
+  if (!ok) return;
+  try {
+    const r = await fetch("/admin/keys?id=" + id, { method: "DELETE", headers: H });
+    if (!r.ok) { toast("删除失败: " + r.status, "err"); return; }
+    toast("Key #" + id + " 已永久删除", "ok");
+    refresh();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+async function clearKeyExpiry(id) {
+  try {
+    const r = await fetch("/admin/keys?id=" + id, {
+      method: "PUT", headers: H, body: JSON.stringify({ expires_at: "" })
+    });
+    if (!r.ok) { toast("操作失败: " + r.status, "err"); return; }
+    toast("已改为永不过期", "ok");
+    refresh();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+// Raises or lifts a key's token ceiling. 0 is not a typo here: it is the
+// sentinel mwQuota short-circuits on, the one the table renders as "· 不限"
+// and the one the Prometheus gauge labels 0 = unlimited. An empty answer is
+// read the same way, because "no number" is how most people say "no limit".
+async function setKeyQuota(id, cur) {
+  var ans = window.prompt(
+    "新的配额上限（token）。\n填 0 或留空 = 不限配额。",
+    cur > 0 ? String(cur) : ""
+  );
+  if (ans === null) return;
+  ans = String(ans).trim();
+  var lim = 0;
+  if (ans !== "") {
+    lim = parseInt(ans, 10);
+    if (isNaN(lim) || lim < 0) { toast("配额需为 0 或正整数（0 = 不限）", "err"); return; }
+  }
+  try {
+    const r = await fetch("/admin/keys?id=" + id, {
+      method: "PUT", headers: H, body: JSON.stringify({ quota_limit: lim })
+    });
+    if (!r.ok) { toast("操作失败: " + r.status + " " + (await r.text()), "err"); return; }
+    toast(lim > 0 ? "配额上限已改为 " + lim.toLocaleString() : "已改为不限配额", "ok");
+    refresh();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+/* ----- usage dashboard ----- */
+
+let usageHours = 24;
+async function refreshUsage() {
+  if (activeTab !== "usage") return;
+  usageHours = parseInt(document.getElementById("u-hours").value, 10) || 24;
+  let u;
+  try { u = await getJSON("/admin/usage?hours=" + usageHours); }
+  catch (e) { return; }
+
+  const t = u.totals || {};
+  document.getElementById("u-req").textContent = (t.requests || 0).toLocaleString();
+  document.getElementById("u-tok").textContent = (t.total_tokens || 0).toLocaleString();
+  document.getElementById("u-io").textContent =
+    (t.prompt_tokens || 0).toLocaleString() + " / " + (t.completion_tokens || 0).toLocaleString();
+  const errEl = document.getElementById("u-err");
+  errEl.textContent = (t.errors || 0).toLocaleString();
+  errEl.className = "value" + (t.errors > 0 ? " red" : "");
+
+  // Speed row. Every number here is window-scoped; the stream count tells the
+  // reader how many rows the TTFT/throughput averages actually cover, so an
+  // average over three requests is never mistaken for one over three thousand.
+  const lat = u.latency || {};
+  const streams = lat.stream_requests || 0;
+  document.getElementById("u-ttft").textContent = streams ? fmtMs(lat.avg_ttft_ms) : "—";
+  document.getElementById("u-ttft-sub").textContent = streams ? "平均等待首个输出 token" : "该区间无流式请求";
+  document.getElementById("u-ttft95").textContent = streams ? fmtMs(lat.p95_ttft_ms) : "—";
+  document.getElementById("u-stream").textContent = streams.toLocaleString();
+  document.getElementById("u-tps").textContent =
+    lat.avg_tokens_per_sec > 0 ? Number(lat.avg_tokens_per_sec).toFixed(1) : "—";
+  document.getElementById("u-lat").textContent = t.requests ? fmtMs(lat.avg_latency_ms) : "—";
+  document.getElementById("u-lat95").textContent = t.requests ? fmtMs(lat.p95_latency_ms) : "—";
+  // Input cache: the share of input tokens the providers served from their own
+  // prefix cache rather than recomputing. This is the cost KPI, so it is shown
+  // over token weight, not request count — one 40k-token agent turn matters
+  // more to the bill than fifty health checks.
+  //
+  // The gateway's own GET response cache (lat.cache_hits) is deliberately kept
+  // off this card. Counting it here used to report a single-digit "hit rate"
+  // for a perfectly healthy service, because chat completions are POSTs and are
+  // never eligible for that cache in the first place.
+  const pc = u.prompt_cache || {};
+  const pcPrompt = pc.prompt_tokens || 0;
+  if (pcPrompt > 0) {
+    document.getElementById("u-cache").textContent = (pc.hit_rate || 0).toFixed(1) + "%";
+    document.getElementById("u-cache-sub").textContent =
+      compactNum(pc.hit_tokens) + " / " + compactNum(pcPrompt) + " 输入 token";
+  } else {
+    document.getElementById("u-cache").textContent = "—";
+    document.getElementById("u-cache-sub").textContent = "该区间没有带 token 的请求";
+  }
+
+  const maxKey = Math.max(1, ...(u.by_key || []).map(k => k.total_tokens || 0));
+  setRows("u-bykey", (u.by_key || []).map(function (k) {
+    return "<tr><td class='mono'>" + k.key_id + "</td><td>" + escapeHtml(k.owner) + "</td>" +
+      "<td class='mono'>" + (k.requests || 0).toLocaleString() + "</td>" +
+      "<td class='mono muted'>" + (k.prompt_tokens || 0).toLocaleString() + "</td>" +
+      "<td class='mono muted'>" + (k.completion_tokens || 0).toLocaleString() + "</td>" +
+      "<td class='mono'>" + shareBar(k.total_tokens || 0, maxKey, (k.total_tokens || 0).toLocaleString()) + "</td>" +
+      "<td class='" + (k.errors ? "mono' style='color:var(--red)" : "mono muted") + "'>" +
+      (k.errors || 0).toLocaleString() + "</td></tr>";
+  }).join("") || emptyRow(7, "该区间内没有请求"));
+
+  renderUsageModels(u.by_model || []);
+  renderUsageShare("u-byday", u.by_day || [], "day");
+}
+
+// fmtMs switches units at the second so a 4ms TTFT stays readable and a 12s
+// generation does not print as "12000ms".
+function fmtMs(v) {
+  v = Number(v) || 0;
+  if (v >= 1000) return (v / 1000).toFixed(2) + "s";
+  return Math.round(v) + "ms";
+}
+
+// Token counts in this console are routinely five digits, and a raw 41,427
+// next to a percentage is wide enough to push the row into ellipsis.
+function compactNum(v) {
+  v = Number(v) || 0;
+  if (v >= 1000000) return (v / 1000000).toFixed(1) + "M";
+  if (v >= 1000) return (v / 1000).toFixed(1) + "k";
+  return String(v);
+}
+
+// The model table carries the two speed columns that make it a selection tool
+// rather than a bill: which provider answers first, and which types fastest.
+// Rows without a measurement show "—" instead of a misleading zero.
+function renderUsageModels(rows) {
+  const max = Math.max(1, ...rows.map(r => r.total_tokens || 0));
+  setRows("u-bymodel", rows.map(function (r) {
+    return "<tr><td>" + escapeHtml(String(r.model)) + "</td>" +
+      "<td class='mono'>" + (r.requests || 0).toLocaleString() + "</td>" +
+      "<td class='mono'>" + (r.total_tokens || 0).toLocaleString() + "</td>" +
+      "<td class='mono'>" + (r.avg_ttft_ms > 0 ? fmtMs(r.avg_ttft_ms)
+        : "<span class='muted'>—</span>") + "</td>" +
+      "<td class='mono'>" + (r.avg_tokens_per_sec > 0
+        ? Number(r.avg_tokens_per_sec).toFixed(1) : "<span class='muted'>—</span>") + "</td>" +
+      "<td class='mono'>" + cacheRateCell(r.cache_hit_rate) + "</td>" +
+      "<td>" + shareBar(r.total_tokens || 0, max, "") + "</td></tr>";
+  }).join("") || emptyRow(7, "该区间内没有请求"));
+}
+
+// Cache hit rate for one model row. A model that reports no prompt tokens at
+// all has nothing to measure, so it gets a dash rather than a 0% that would
+// read as "this provider never caches".
+function cacheRateCell(rate) {
+  const v = Number(rate) || 0;
+  if (v <= 0) return "<span class='muted'>—</span>";
+  const col = v >= 50 ? "var(--green)" : (v >= 10 ? "var(--yellow)" : "var(--red)");
+  return "<span style='color:" + col + "'>" + v.toFixed(1) + "%</span>";
+}
+
+function renderUsageShare(tbodyId, rows, labelKey) {
+  const max = Math.max(1, ...rows.map(r => r.total_tokens || 0));
+  setRows(tbodyId, rows.map(function (r) {
+    return "<tr><td>" + escapeHtml(String(r[labelKey])) + "</td>" +
+      "<td class='mono'>" + (r.requests || 0).toLocaleString() + "</td>" +
+      "<td class='mono'>" + (r.total_tokens || 0).toLocaleString() + "</td>" +
+      "<td>" + shareBar(r.total_tokens || 0, max, "") + "</td></tr>";
+  }).join("") || emptyRow(4, "该区间内没有请求"));
+}
+
+// Inline bar + number: a raw token column makes it hard to see which rows
+// actually dominate spend.
+function shareBar(v, max, label) {
+  const pct = Math.max(0, Math.min(100, (v / max) * 100));
+  return "<div style='display:flex;align-items:center;gap:8px;min-width:120px;'>" +
+    "<span style='flex:1;height:5px;border-radius:3px;background:var(--line);overflow:hidden;'>" +
+    "<span style='display:block;height:100%;width:" + pct.toFixed(1) + "%;background:var(--accent);'></span></span>" +
+    (label ? "<span style='font-variant-numeric:tabular-nums;min-width:60px;text-align:right;'>" + label + "</span>" : "") +
+    "</div>";
+}
+
+function emptyRow(cols, msg) {
+  return "<tr><td colspan='" + cols + "' class='td-empty'>" + msg + "</td></tr>";
+}
+
+// First paint only: show skeleton rows instead of a blank "加载中…" while the
+// first fetch is in flight. After the first successful render the table simply
+// keeps its last content during transient errors (tracked per table id).
+function skeletonRows(cols, n) {
+  var rows = "";
+  for (var i = 0; i < n; i++) {
+    rows += "<tr><td colspan='" + cols + "'><span class='sk-bar' style='width:" +
+      (45 + ((i * 17) % 40)) + "%'></span></td></tr>";
+  }
+  return rows;
+}
+function showSkeleton(tbodyId, cols, n) {
+  var tb = document.getElementById(tbodyId);
+  if (tb && !tb.dataset.loaded) tb.innerHTML = skeletonRows(cols, n);
+}
+function markLoaded(tbodyId) {
+  var tb = document.getElementById(tbodyId);
+  if (tb) tb.dataset.loaded = "1";
+}
+
+/* Replace a tbody's rows only when they actually changed. The 2s poll used to
+   rebuild every table on every tick, which reset :hover, broke text selection
+   and flickered scroll shadows — and highlighted "new" rows could never
+   survive to be seen. */
+function setRows(tbodyId, html) {
+  var tb = document.getElementById(tbodyId);
+  if (!tb) return;
+  markLoaded(tbodyId);
+  if (tb.dataset.html !== html) {
+    tb.dataset.html = html;
+    tb.innerHTML = html;
+  }
+}
+
+/* Connection health: any successful admin call hides the banner; consecutive
+   failures beyond a small grace count show it. Keeps a silently-frozen
+   dashboard from masquerading as "no traffic". */
+var connFails = 0;
+function connOK() {
+  connFails = 0;
+  var b = document.getElementById("connbar");
+  if (b) b.classList.remove("on");
+}
+function connFail() {
+  connFails++;
+  if (connFails >= 3) {
+    var b = document.getElementById("connbar");
+    if (b) b.classList.add("on");
+  }
+}
+
+/* ----- playground ----- */
+
+// Pick a sensible default request per API format so the console is useful
+// without the operator having to recall each provider's payload shape.
+const PG_TEMPLATES = {
+  "openai-chat": { path: "/chat/completions", body: { model: "", messages: [{ role: "user", content: "你好，用一句话介绍自己" }], stream: false } },
+  "openai-responses": { path: "/responses", body: { model: "", input: "你好，用一句话介绍自己" } },
+  "anthropic-messages": { path: "/v1/messages", body: { model: "", max_tokens: 1024, messages: [{ role: "user", content: "你好，用一句话介绍自己" }] } },
+  "generic": { path: "", body: {} }
+};
+
+function onPlaygroundRoute() {
+  const id = parseInt(document.getElementById("p-route").value, 10);
+  const r = allRoutes.find(x => x.id === id);
+  if (!r) return;
+  const tpl = PG_TEMPLATES[r.api_format] || PG_TEMPLATES.generic;
+  const firstModel = (r.models && r.models.length) ? r.models[0] : "";
+  document.getElementById("p-path").value = r.match_prefix + tpl.path;
+  const body = JSON.parse(JSON.stringify(tpl.body));
+  if (body && typeof body === "object" && "model" in body) body.model = firstModel;
+  document.getElementById("p-body").value = JSON.stringify(body, null, 2);
+}
+
+async function runPlayground() {
+  const btn = document.getElementById("p-send");
+  const id = parseInt(document.getElementById("p-route").value, 10);
+  if (!id) { toast("请先选择一条路由", "err"); return; }
+  const rawBody = document.getElementById("p-body").value.trim();
+  // Validate locally first: a typo'd JSON body should not cost an upstream call.
+  if (rawBody) {
+    try { JSON.parse(rawBody); }
+    catch (e) { toast("请求体不是合法 JSON: " + e.message, "err"); return; }
+  }
+  return withBusy(btn, "请求中…", async function () {
+  document.getElementById("p-meta").textContent = "";
+  document.getElementById("p-out").textContent = "请求中…";
+  try {
+    const r = await fetch("/admin/playground", {
+      method: "POST", headers: H,
+      body: JSON.stringify({
+        route_id: id,
+        path: document.getElementById("p-path").value.trim(),
+        method: document.getElementById("p-method").value,
+        body: rawBody
+      })
+    });
+    if (!r.ok) { document.getElementById("p-out").textContent = "接口错误 " + r.status + "\n" + (await r.text()); return; }
+    const out = await r.json();
+    const meta = document.getElementById("p-meta");
+    meta.innerHTML =
+      "<span>状态 <b style='color:" + (out.status < 400 ? "var(--green)" : "var(--red)") + "'>" +
+      out.status + "</b></span><span>耗时 " + out.latency_ms + "ms</span>" +
+      "<span>渠道 " + escapeHtml(out.channel || "-") + "</span>" +
+      (out.truncated ? "<span style='color:var(--yellow)'>响应已截断至 200KB</span>" : "");
+    let text = out.body || "";
+    // Pretty-print JSON so a minified upstream answer is actually readable.
+    try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+    document.getElementById("p-out").textContent = text;
+  } catch (e) {
+    document.getElementById("p-out").textContent = "请求异常: " + (e && e.message ? e.message : String(e));
+  }
+  });
+}
+
+/* ----- channel manager ----- */
+
+let chRouteId = null;
+
+function openChannels(id) {
+  const r = allRoutes.find(x => x.id === id);
+  if (!r) return;
+  chRouteId = id;
+  document.getElementById("ch-title").textContent = r.name + "  (" + r.match_prefix + ")";
+  document.getElementById("ch-panel").style.display = "";
+  renderChannels();
+  document.getElementById("ch-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeChannels() {
+  chRouteId = null;
+  document.getElementById("ch-panel").style.display = "none";
+}
+
+function renderChannels() {
+  if (chRouteId === null) return;
+  const r = allRoutes.find(x => x.id === chRouteId);
+  if (!r) { closeChannels(); return; }
+  const list = r.channels || [];
+  setRows("ch-list", list.map(function (c) {
+    return "<tr>" +
+      "<td>" + escapeHtml(c.name || ("#" + c.id)) + "</td>" +
+      "<td class='mono muted' style='max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='" + escapeHtml(c.base_url) + "'>" + escapeHtml(c.base_url) + "</td>" +
+      "<td class='center'><input type='number' class='mini' value='" + c.priority +
+        "' onchange='setChannelField(" + c.id + ", \"priority\", this.value)' /></td>" +
+      "<td class='center'><input type='number' class='mini' min='1' value='" + c.weight +
+        "' onchange='setChannelField(" + c.id + ", \"weight\", this.value)' /></td>" +
+      "<td class='center'><button type='button' class='lk" + (c.enabled ? " ok" : "") + "' data-act='chtoggle' data-id='" + c.id + "'>" +
+        (c.enabled ? "启用" : "停用") + "</button></td>" +
+      "<td class='center'>" + (c.circuit_open
+        ? "<span class='chip-sm bad'>已熔断</span>"
+        : "<span class='chip-sm ok'>正常</span>") + "</td>" +
+      "<td class='ops'><button type='button' class='lk danger' data-act='chdel' data-id='" + c.id + "'>删除</button>" +
+      (c.has_key ? "<span class='chip-sm' style='margin-left:6px'>带密钥</span>" : "") + "</td></tr>";
+  }).join("") || emptyRow(7, "还没有渠道，请在下方添加"));
+
+  document.getElementById("ch-hint").innerHTML = list.length
+    ? "共 " + list.length + " 个渠道。" + (r.healthy_channels || 0) + " 个当前可用（启用且未熔断）。"
+    : "这条路由还没有渠道。添加第一个后即可按优先级与权重分流；在未添加之前，网关会使用路由自身的 Base URL 作为唯一渠道。";
+}
+
+async function setChannelField(id, field, value) {
+  const n = parseInt(value, 10);
+  if (isNaN(n) || n < 0) { toast("请输入非负整数", "err"); renderChannels(); return; }
+  const payload = { route_id: chRouteId };
+  payload[field] = n;
+  try {
+    const r = await fetch("/admin/channels?id=" + id, {
+      method: "PUT", headers: H, body: JSON.stringify(payload)
+    });
+    if (!r.ok) { toast("保存失败: " + r.status + " " + (await r.text()), "err"); renderChannels(); return; }
+    toast("已保存", "ok");
+    await reloadRoutesOnly();
+    renderChannels();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+async function addChannel() {
+  if (!chRouteId) { toast("请先选择路由", "err"); return; }
+  const url = document.getElementById("ch-url").value.trim();
+  if (!url) { toast("请填写渠道的 Base URL", "err"); return; }
+  const payload = {
+    route_id: chRouteId,
+    name: document.getElementById("ch-name").value.trim(),
+    base_url: url,
+    downstream_auth_key: document.getElementById("ch-key").value.trim()
+  };
+  const pri = parseInt(document.getElementById("ch-pri").value, 10);
+  const w = parseInt(document.getElementById("ch-w").value, 10);
+  if (!isNaN(pri)) payload.priority = pri;
+  if (!isNaN(w) && w > 0) payload.weight = w;
+  try {
+    const r = await fetch("/admin/channels", {
+      method: "POST", headers: H, body: JSON.stringify(payload)
+    });
+    if (!r.ok) { toast("添加失败: " + r.status + " " + (await r.text()), "err"); return; }
+    toast("渠道已添加", "ok");
+    ["ch-name", "ch-url", "ch-key", "ch-pri", "ch-w"].forEach(function (id) {
+      document.getElementById(id).value = "";
+    });
+    await reloadRoutesOnly();
+    renderChannels();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+async function toggleChannel(id, enabled) {
+  const payload = { route_id: chRouteId, enabled: !enabled };
+  try {
+    const r = await fetch("/admin/channels?id=" + id, {
+      method: "PUT", headers: H, body: JSON.stringify(payload)
+    });
+    if (!r.ok) { toast("操作失败: " + r.status + " " + (await r.text()), "err"); return; }
+    await reloadRoutesOnly();
+    renderChannels();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+async function deleteChannel(id) {
+  const ok = await askConfirm("删除渠道", "删除后该上游不再参与分流。至少要保留一个启用的渠道。", "删除", true);
+  if (!ok) return;
+  try {
+    const r = await fetch("/admin/channels?id=" + id, { method: "DELETE", headers: H });
+    if (!r.ok) { toast("删除失败: " + r.status + " " + (await r.text()), "err"); return; }
+    toast("渠道已删除", "ok");
+    await reloadRoutesOnly();
+    renderChannels();
+  } catch (e) { toast("网络错误", "err"); }
+}
+
+// Channel edits change the route table, so refresh just that instead of a full
+// tick — a full refresh would also reset the playground and usage panes.
+async function reloadRoutesOnly() {
+  try { allRoutes = await getJSON("/admin/routes"); renderRouteTable(); } catch (e) {}
+}
+
+function resetForm() {
+  editingId = null;
+  editingModels = [];
+  document.getElementById("f-base").value = "";
+  document.getElementById("f-prefix").value = "";
+  document.getElementById("f-format").value = "openai-chat";
+  document.getElementById("f-rps").value = 50;
+  document.getElementById("f-ttl").value = 30;
+  document.getElementById("f-cb").checked = true;
+  document.getElementById("f-scope").value = "global";
+  document.getElementById("f-dskey").value = "";
+  document.getElementById("f-model-input").value = "";
+  renderModels();
+  // Reset the formState mirror to the same defaults.
+  formState = {
+    api_format: "openai-chat",
+    upstream_rps: "50",
+    cache_ttl: "30",
+    cache_scope: "global",
+    cb_enabled: true,
+    downstream_auth_key: "",
+    base_url: "",
+    match_path: ""
+  };
+  document.getElementById("f-save").textContent = "添加";
+  document.getElementById("f-cancel").style.display = "none";
+  document.getElementById("f-err").textContent = "";
+}
+
+/* Poll lifecycle. A hidden tab keeps polling at full speed in the old version,
+   burning quota checks and request-log fetches nobody is looking at; we stop
+   the timer while hidden and kick an immediate refresh on return so the pane
+   never looks stale. */
+var seenLogIds = {};
+var seenLogInit = false;
+
+function startPoll() {
+  if (pollTimer === null) {
+    pollTimer = setInterval(refresh, 2000);
+    refresh();
+  }
+}
+function stopPoll() {
+  if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+}
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden) stopPoll();
+  else if (document.getElementById("login-gate").style.display !== "flex") startPoll();
+});
+window.addEventListener("online", function () { connOK(); if (!document.hidden) startPoll(); });
+
+/* Keyboard: Alt+ArrowLeft/Right or plain 1..7 switch panes without reaching
+   for the mouse. Ignored while typing in a field. */
+(function bindTabKeys() {
+  var ORDER = ["overview", "routes", "keys", "usage", "playground", "logs", "guide"];
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    var typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    if (typing) return;
+    var idx = ORDER.indexOf(activeTab);
+    if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); switchTab(ORDER[(idx + 1) % ORDER.length], true); }
+    else if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); switchTab(ORDER[(idx - 1 + ORDER.length) % ORDER.length], true); }
+    else if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "7") {
+      switchTab(ORDER[parseInt(e.key, 10) - 1], true);
+    }
+  });
+})();
+
+/* Esc closes the issue dialog too (the confirm dialog already handles it). */
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") {
+    var m = document.getElementById("issue-mask");
+    if (m && m.classList.contains("on")) closeIssueDialog();
+  }
+});
+
+// Restore the tab from the URL (e.g. a shared "#keys" link) before the first
+// paint; switchTab kicks off its own refresh so the pane is never blank.
+switchTab((location.hash || "#overview").slice(1), false);
+
+// Probe the session before wiring the 2s poll: a 403 here means not logged
+// in, and the right response is the login gate rather than a background
+// stream of forbidden requests.
+(async function boot() {
+  try {
+    const r = await fetch("/admin/metrics", { headers: H });
+    if (r.status === 403) { showLogin(); return; }
+  } catch (e) { /* keep polling anyway; the page still renders chrome */ }
+  startPoll();
+})();
+</script>
+</body>
+</html>

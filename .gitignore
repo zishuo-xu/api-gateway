@@ -1,0 +1,34 @@
+# 编译产物
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试与覆盖率产物
+*.test
+*.out
+coverage.*
+
+# 环境变量与密钥 —— 生产密钥禁止入库
+.env
+.env.local
+deploy/production.env
+
+# 数据库快照（含生产数据记录）
+deploy/dump.sql
+*.sql.gz
+*.dump
+
+# 本地数据目录
+pgdata/
+data/
+
+# 编辑器与系统文件
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# WorkBuddy 工作区数据
+.workbuddy/

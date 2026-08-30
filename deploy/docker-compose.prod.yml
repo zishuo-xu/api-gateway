@@ -1,0 +1,46 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # 故意不写 ports：redis 只在 compose 网络内可达，宿主机与公网都摸不到。
+    # 内存兜底：网关缓存的是整个 GET 响应体，现在总量虽小（~1.5M），
+    # 但接一个缓存多的 GET API 就会涨；给个上限让 LRU 淘汰，而不是 OOM。
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: gateway
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      # PG 镜像只在数据目录为空的首次启动执行它；migrate.sql 只做 ALTER，
+      # 基础建表靠这里，所以全新部署必须挂上。
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    # 同上，不暴露端口。本地调试才需要 5432，生产一切走容器网络。
+
+  gateway:
+    build:
+      # compose 文件在 deploy/ 下，构建上下文指回项目根。
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_ADDR: redis:6379
+      PG_DSN: postgres://gateway:${PG_PASSWORD}@postgres:5432/gateway?sslmode=disable
+      GATEWAY_ADDR: ":8080"
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      DEMO_API_KEY: ${DEMO_API_KEY}
+      UPSTREAM_TIMEOUT_SEC: "180"
+      MAX_ATTEMPTS: "3"
+      AUTO_MIGRATE: "true"
+      UNIFIED_PREFIX: "/v1"
+      QUOTA_FLUSH_SEC: "10"
+      INJECT_STREAM_USAGE: "true"
+    depends_on:
+      - redis
+      - postgres

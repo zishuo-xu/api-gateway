@@ -1,0 +1,32 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      PG_DSN: postgres://gateway:gateway@postgres:5432/gateway?sslmode=disable
+      GATEWAY_ADDR: ":8080"
+      ADMIN_TOKEN: dev-admin-token
+      DEMO_API_KEY: test-key-123
+    depends_on:
+      - redis
+      - postgres
