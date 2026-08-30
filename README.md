@@ -38,11 +38,12 @@ curl -H "X-API-Key: test-key-123" \
 | [docs/usage.md](docs/usage.md) | 使用者 | 环境变量全表、路由与 Key 配置、两种寻址方式、监控台、冒烟测试 |
 | [docs/architecture.md](docs/architecture.md) | 开发者 | 进程结构、请求全链路、状态分布、多实例一致性、Redis key 总表 |
 | [docs/design.md](docs/design.md) | 开发者 | 限流、缓存、熔断、故障转移、计费、配额、审计等子系统的设计权衡 |
+| [docs/deployment.md](docs/deployment.md) | 运维 | 生产拓扑、需要出境代理的通道、开机自启、备份回滚 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 复盘 / 简历 | 规模数据、技术要点、与初版设计的偏差、已知边界 |
 | [api-gateway-design.md](api-gateway-design.md) | — | v1 初版设想，**历史文档**，内容已被实现超越 |
 
 想跑起来看 **usage**，想改代码看 **architecture** 和 **design**，
-想了解这个项目的取舍看 **PROJECT_SUMMARY**。
+想部署看 **deployment**，想了解这个项目的取舍看 **PROJECT_SUMMARY**。
 
 ## 目录结构
 
