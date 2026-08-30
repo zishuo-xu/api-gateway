@@ -44,3 +44,16 @@ services:
     depends_on:
       - redis
       - postgres
+    # grok-net 必须显式声明。靠手工 `docker network connect` 加上去的连接，
+    # 在 compose 重建容器时会丢失——重建出来的是新容器，只会连本文件里声明的
+    # 网络。结果就是容器内解析不到 progrok，Grok 通道直接 502。
+    networks:
+      - default
+      - grok-net
+
+# grok-net 由 mihomo / progrok 那套手工容器共用，本文件不创建它，只接入。
+# 前置条件：该网络必须已存在（见 docs/deployment.md 第 3 节）。
+networks:
+  grok-net:
+    external: true
+    name: grok-net

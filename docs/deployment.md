@@ -104,6 +104,35 @@ docker network connect grok-net deploy-gateway-1
 也能解析 `progrok`（走 grok-net）。无需暴露端口到宿主机，
 链路全部留在容器网络内部。
 
+**但手工 connect 只是一次性的。** compose 重建容器时，新容器只会连接
+compose 文件里声明的网络，手工加上去的那条**随之丢失**。
+
+这个失效非常隐蔽：部署全程不报错，健康检查也返回 200——
+因为它只打 `:8080/admin/`，不经过任何上游。等到有人调用 Grok 通道才炸：
+
+```
+502 upstream error: Post "http://progrok:18645/v1/chat/completions":
+dial tcp: lookup progrok on 127.0.0.11:53: server misbehaving
+```
+
+所以必须写进 compose 文件，让每次重建都自动恢复：
+
+```yaml
+services:
+  gateway:
+    networks:
+      - default      # compose 自建网络，靠它连 redis / postgres
+      - grok-net     # 外部网络，靠它解析 progrok
+
+networks:
+  grok-net:
+    external: true   # 由 mihomo / progrok 那套容器创建，本文件只接入
+    name: grok-net
+```
+
+两条都不能少：只写 `grok-net` 会让 gateway 连不上数据库，
+只写 `default`（或不写）就是上面那个 502。
+
 ### 验证顺序
 
 分层验证，出问题能立刻定位在哪一层：
