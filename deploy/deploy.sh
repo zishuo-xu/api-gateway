@@ -2,13 +2,13 @@
 # 一键部署最新代码到阿里云（只重建网关容器，数据库与数据不动）
 #
 # 用法:
-#   GATEWAY_HOST=<服务器地址> ./deploy/deploy.sh
+#   ./deploy/deploy.sh
 #
-# 环境变量:
-#   GATEWAY_HOST  健康检查的目标地址，默认 localhost
+# 健康检查在服务器上执行（打服务器自己的 8080），因此不需要知道公网地址，
+# 也不需要任何环境变量——既避免了把地址写进这个公开仓库，也确保它验证的
+# 确实是刚部署的那台机器，而不是跑脚本的这台。
 #
 # 注意: 本仓库是公开的，不要把服务器 IP 或域名硬编码到这里。
-#       地址只在运行时通过环境变量传入。
 set -e
 cd "$(dirname "$0")/.."
 
@@ -22,4 +22,7 @@ ssh aliyun 'cd /opt/api-gateway && docker compose -f deploy/docker-compose.prod.
 echo "[3/3] 健康检查..."
 sleep 3
 ssh aliyun 'gw status'
-curl -s -o /dev/null -w "公网健康: admin=%{http_code}\n" "http://${GATEWAY_HOST:-localhost}:8080/admin/"
+# 必须在服务器上执行。放在本地执行时它会打到本机的 8080——如果本地恰好
+# 跑着同一套 docker-compose，会返回 200，看起来部署验证通过，实际上验证的
+# 是本地容器，服务器起没起来这一步一概不知。
+ssh aliyun "curl -s -o /dev/null -w '健康: admin=%{http_code}\n' http://localhost:8080/admin/"
