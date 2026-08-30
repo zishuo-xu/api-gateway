@@ -1035,9 +1035,35 @@ func (s *Server) deleteRoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+	// Deactivate the route and disable its channels together.
+	//
+	// The channel update is not cosmetic. A route is what pulls a channel into
+	// memory, so once the route is off, its channels can never be reached.
+	// Leaving them enabled accumulates rows that look live but are not, and
+	// "how many upstreams are actually serving" stops being answerable from
+	// the data. The rows are kept either way - request_logs may reference them.
+	//
+	// Both statements share a transaction: a half-applied delete is worse than
+	// a failed one.
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
 	// soft delete: keep the row for audit, just deactivate it.
-	if _, err := s.DB.ExecContext(r.Context(),
+	if _, err := tx.ExecContext(r.Context(),
 		`UPDATE routes SET status=0 WHERE id=$1`, id); err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(),
+		`UPDATE channels SET enabled=false WHERE route_id=$1`, id); err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -267,5 +268,70 @@ func TestKeyNameStoredAndListed(t *testing.T) {
 		t.Errorf("unnamed key id %d missing from the list", unnamedID)
 	} else if k.Name != "" {
 		t.Errorf("unnamed key name = %q, want empty", k.Name)
+	}
+}
+
+// Deleting a route used to leave its channels enabled. The route is what pulls
+// a channel into memory, so those rows could never serve again — they just sat
+// there looking live while the channel list disagreed with reality. This pins
+// the fix: both updates land together, in one transaction.
+func TestDeleteRouteDisablesItsChannels(t *testing.T) {
+	s, ts := newAdminTestServer(t)
+	ctx := context.Background()
+
+	var routeID int64
+	if err := s.DB.QueryRowContext(ctx,
+		`INSERT INTO routes (name, base_url, match_path, status)
+		 VALUES ('zt-delete-chan','https://zt-chan.test','/zt-chan',1) RETURNING id`,
+	).Scan(&routeID); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = s.DB.ExecContext(bg, `DELETE FROM channels WHERE route_id=$1`, routeID)
+		_, _ = s.DB.ExecContext(bg, `DELETE FROM routes WHERE id=$1`, routeID)
+	})
+
+	var chanID int64
+	if err := s.DB.QueryRowContext(ctx,
+		`INSERT INTO channels (route_id, name, base_url, enabled)
+		 VALUES ($1,'zt-chan-a','https://zt-chan.test/v1',true) RETURNING id`,
+		routeID).Scan(&chanID); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete,
+		ts.URL+"/admin/routes?id="+strconv.FormatInt(routeID, 10), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-Admin-Token", s.Cfg.AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete route: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete route = %d, want 200: %s", resp.StatusCode, body)
+	}
+
+	var routeStatus int
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT status FROM routes WHERE id=$1`, routeID).Scan(&routeStatus); err != nil {
+		t.Fatalf("read route: %v", err)
+	}
+	if routeStatus != 0 {
+		t.Errorf("route status = %d, want 0 (soft deleted)", routeStatus)
+	}
+
+	var enabled bool
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT enabled FROM channels WHERE id=$1`, chanID).Scan(&enabled); err != nil {
+		t.Fatalf("read channel: %v", err)
+	}
+	if enabled {
+		t.Error("channel is still enabled after its route was deleted: the row is " +
+			"unreachable but looks live, so the channel list stops matching reality")
 	}
 }
