@@ -933,6 +933,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !oversized && s.Cfg != nil && s.Cfg.InjectStreamUsage {
 		body = injectStreamUsage(r, route, body)
 	}
+	// Upstreams reject reasoning_effort on casing or unknown levels alone, and
+	// a rejected parameter takes the whole request down with it.
+	if !oversized && s.Cfg != nil && s.Cfg.NormalizeParams {
+		body = normalizeReasoningEffort(r, route, body)
+	}
 
 	order := s.orderedChannels(route)
 	if len(order) == 0 {
@@ -1311,6 +1316,66 @@ func injectStreamUsage(r *http.Request, route *Route, body []byte) []byte {
 		return body // caller already decided
 	}
 	payload["stream_options"] = map[string]interface{}{"include_usage": true}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	r.Body = io.NopCloser(bytes.NewReader(out))
+	r.ContentLength = int64(len(out))
+	return out
+}
+
+// reasoningEffortLevels are the effort levels providers actually implement.
+// Clients disagree on casing and invent levels: some send "HIGH", some send
+// "auto", and both come back as a 400 that never reaches the model — Grok
+// answers "Invalid reasoning effort.", DeepSeek wraps a provider error. The
+// caller meant to hint at a thinking budget, not to make the call fail, so map
+// what we can and drop what we cannot.
+var reasoningEffortLevels = map[string]string{
+	"low": "low", "medium": "medium", "high": "high",
+	"minimal": "minimal", "xhigh": "xhigh",
+}
+
+// normalizeReasoningEffort rewrites reasoning_effort into a value the upstream
+// accepts. Returns the body untouched unless something actually needed fixing,
+// so a well-formed request costs nothing but a JSON round-trip.
+//
+// Callers must only pass a complete body: an oversized one is a truncated
+// prefix and re-marshalling it would silently drop the rest.
+func normalizeReasoningEffort(r *http.Request, route *Route, body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	switch route.APIFormat {
+	case "openai-chat", "openai-completions", "openai-responses":
+	default:
+		return body
+	}
+	var payload map[string]interface{}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber() // keep integer literals exact on the way back out
+	if err := dec.Decode(&payload); err != nil {
+		return body
+	}
+	raw, ok := payload["reasoning_effort"]
+	if !ok {
+		return body
+	}
+	s, isStr := raw.(string)
+	norm, known := "", false
+	if isStr {
+		norm, known = reasoningEffortLevels[strings.ToLower(strings.TrimSpace(s))]
+	}
+	switch {
+	case known && norm == s:
+		return body // already canonical, leave the bytes alone
+	case known:
+		payload["reasoning_effort"] = norm
+	default:
+		// Unknown level, or not a string at all: forwarding it is a guaranteed
+		// 400, so drop the field and let the model use its default budget.
+		delete(payload, "reasoning_effort")
+	}
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return body
@@ -2004,6 +2069,21 @@ func (s *Server) circuitKeys() []string {
 	return out
 }
 
+// adoptChannelFormat fills a route's empty api_format from its first channel.
+//
+// A route inserted straight into SQL — or created before api_format was written
+// — can leave the route's own format empty while its channels name the real
+// one. Forwarding already prefers the channel's, so the two disagreed:
+// injectStreamUsage and parameter normalisation both read route.APIFormat and
+// were silently skipped, which showed up as a Grok route that never got
+// stream_options injected. Adopt the channel's so every reader sees the format
+// the request is actually sent as.
+func adoptChannelFormat(route *Route) {
+	if route.APIFormat == "" && len(route.Channels) > 0 {
+		route.APIFormat = route.Channels[0].APIFormat
+	}
+}
+
 // LoadRoutes reads active routes (and their channels) from DB.
 func LoadRoutes(db *sql.DB) ([]Route, error) {
 	rows, err := db.QueryContext(context.Background(), `
@@ -2060,19 +2140,20 @@ func LoadRoutes(db *sql.DB) ([]Route, error) {
 	for i := range routes {
 		if cs, ok := byRoute[routes[i].ID]; ok && len(cs) > 0 {
 			routes[i].Channels = cs
-			continue
+		} else {
+			// Route predates the channels table: synthesise its implicit
+			// channel so every code path can assume len(Channels) >= 1.
+			routes[i].Channels = []Channel{{
+				RouteID:           routes[i].ID,
+				Name:              routes[i].Name,
+				BaseURL:           routes[i].BaseURL,
+				APIFormat:         routes[i].APIFormat,
+				DownstreamAuthKey: routes[i].DownstreamAuthKey,
+				Weight:            1,
+				Enabled:           true,
+			}}
 		}
-		// Route predates the channels table: synthesise its implicit channel so
-		// every code path can assume len(Channels) >= 1.
-		routes[i].Channels = []Channel{{
-			RouteID:           routes[i].ID,
-			Name:              routes[i].Name,
-			BaseURL:           routes[i].BaseURL,
-			APIFormat:         routes[i].APIFormat,
-			DownstreamAuthKey: routes[i].DownstreamAuthKey,
-			Weight:            1,
-			Enabled:           true,
-		}}
+		adoptChannelFormat(&routes[i])
 	}
 	return routes, nil
 }

@@ -31,6 +31,11 @@ type Config struct {
 	// requests. Without it providers omit the final usage event and every
 	// streamed call would bill as a flat single unit.
 	InjectStreamUsage bool
+	// NormalizeParams rewrites request parameters that upstreams reject on
+	// shape alone, currently reasoning_effort: casing is folded to the level
+	// the upstream implements and unknown levels are dropped instead of
+	// turning the whole call into a 400.
+	NormalizeParams bool
 	// QuotaFlushSec is how often Redis quota counters are written back to
 	// Postgres.
 	QuotaFlushSec int
@@ -64,6 +69,7 @@ func Load() *Config {
 		MaxAttempts:        getenvInt("MAX_ATTEMPTS", 3),
 		TrustProxy:         getenvBool("TRUST_PROXY", false),
 		InjectStreamUsage:  getenvBool("INJECT_STREAM_USAGE", true),
+		NormalizeParams:    getenvBool("NORMALIZE_PARAMS", true),
 		QuotaFlushSec:      getenvInt("QUOTA_FLUSH_SEC", 10),
 		AutoMigrate:        getenvBool("AUTO_MIGRATE", true),
 		UnifiedPrefix:      getenv("UNIFIED_PREFIX", "/v1"),
