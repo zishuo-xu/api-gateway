@@ -50,10 +50,65 @@ services:
     networks:
       - default
       - grok-net
+    # 刻意不 depends_on progrok：Grok 通道挂掉不应该拖垮 gateway 自己，
+    # DeepSeek 等其它通道还得能用。通道级故障由网关的熔断器兜底。
 
-# grok-net 由 mihomo / progrok 那套手工容器共用，本文件不创建它，只接入。
+  mihomo:
+    image: metacubex/mihomo
+    # 必须锁死名字：progrok 的环境变量写死的是 HTTP_PROXY=http://mihomo:7890，
+    # 按容器名解析。compose 默认生成的 deploy-mihomo-1 会让这个地址解析不到，
+    # progrok 直接断网。同理 gateway 侧也无条件依赖这个名字。
+    container_name: mihomo
+    restart: unless-stopped
+    volumes:
+      # 配置在宿主机固定位置，不随代码仓库走（里面有订阅 URL，不进 git）。
+      - /opt/mihomo:/root/.config/mihomo
+    ports:
+      # 控制 API。只映射回环地址，公网与容器外都摸不到。
+      # gw-proxy-guard 自愈脚本靠它清 DNS 缓存，比重启容器温和——不中断现有连接。
+      - "127.0.0.1:9090:9090"
+    networks:
+      - grok-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --timeout=3 http://127.0.0.1:9090/version >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+  progrok:
+    image: node:22-alpine
+    # 同理锁死：网关里 Grok 渠道的上游地址写的是 http://progrok:18645。
+    container_name: progrok
+    restart: unless-stopped
+    # progrok 没有官方固定版本镜像，只能每次启动现装 CLI。
+    # 副作用是个启动期循环依赖：npm 装包走 HTTP_PROXY=mihomo，
+    # 所以 mihomo 没就绪时 progrok 必然启动失败——由 restart 策略负责重试到成功。
+    command: sh -c "npm i -g progrok >/dev/null 2>&1 && progrok proxy --host 0.0.0.0"
+    environment:
+      HTTP_PROXY: http://mihomo:7890
+      HTTPS_PROXY: http://mihomo:7890
+      NO_PROXY: 127.0.0.1,localhost
+      NODE_OPTIONS: --use-env-proxy
+    volumes:
+      # 卷里存着 SuperGrok 的 OAuth token（device-code 登录一次换来的）。
+      # 必须 external:true —— 否则 compose 会新建 "deploy_progrok-data" 空卷，
+      # token 看起来丢了，得重新走一遍 device-code 登录。
+      - progrok-data:/root
+    networks:
+      - grok-net
+    depends_on:
+      - mihomo
+
+# grok-net 由本文件的 mihomo / progrok 与 gateway 共用。
 # 前置条件：该网络必须已存在（见 docs/deployment.md 第 3 节）。
 networks:
   grok-net:
     external: true
     name: grok-net
+
+volumes:
+  # 同 grok-net：卷是手工 docker run 时建的，本文件只接管不重建。
+  progrok-data:
+    external: true
+    name: progrok-data

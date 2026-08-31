@@ -65,6 +65,8 @@ Redis 与 Postgres 起在容器里，端口映射到宿主机。
 
 1. **代理出口是单点**：整个出境通道只有一个 mihomo，没有备用。
    网关的 failover 只能换上游，**换不了代理出口**——这是两套不同层次的冗余。
+   `gw-proxy-guard` 能自动修复其中「节点 IP 漂移」这一种故障，
+   但机场整体故障时它无能为力（只记日志）。
 2. **机场订阅是不可控的外部付费依赖**，服务商出问题你无从修复。
 3. **订阅额度与网页端共享**，API 调多了网页端就没额度。
 
@@ -223,15 +225,88 @@ curl -N http://localhost:8080/v1/chat/completions \
   但聊天接口是 POST，缓存中间件只处理 GET，所以实际不生效。
   想省额度得靠上层自己控制。
 
+### 故障模式：机场节点换 IP
+
+2026-08-31 实际发生过一次，值得单独记一笔——它的报错很有误导性。
+
+**症状**：网关侧 Grok 通道返回 401，响应体是：
+
+```json
+{"error":{"message":"fetch failed","type":"auth_error"}}
+```
+
+`auth_error` 这个词会让人以为是 OAuth token 失效，其实不是。
+progrok 把所有 fetch 失败都归类成 `auth_error`，这里真正的含义是
+「连 api.x.ai 这一步就没成功」。
+
+**根因**：机场节点会换 IP，而 mihomo 把「节点域名 → 真实 IP」的解析结果
+持久化在 `/opt/mihomo/cache.db`（fake-ip 模式下就是这个文件）。
+这份缓存不会因为 IP 失效而自动作废，mihomo 会一直拿旧地址去连。
+
+本次实例：某个节点的 IP 在当天换过，mihomo 抱着 22 小时前的旧值，
+通道断了一整晚。具体地址不写进公开仓库——排查时从 mihomo 日志里
+取当次的即可，不影响上述四步的任何一步。
+
+**排查四步**：
+
+1. 网关日志拿上游原始响应体，确认是 `fetch failed` 而非 token 类错误
+2. 看 mihomo 日志——它会写出**实际去连的那个 IP**：
+   ```bash
+   docker logs --tail 50 mihomo | grep -i error
+   # [TCP] dial PROXY --> auth.x.ai:443 error: <节点域名>:443
+   #   connect error: dial tcp <IP>:443: i/o timeout
+   ```
+3. 把这个 IP 与 DNS 当前解析结果对比，**两者不一致即为 IP 漂移**：
+   ```bash
+   getent hosts <节点域名>                          # DNS 现在给什么
+   timeout 6 bash -c "echo > /dev/tcp/<日志里的IP>/443"   # 旧 IP 还通不通
+   ```
+4. 修复：`rm /opt/mihomo/cache.db && docker restart mihomo`
+
+**两个坑，都踩过**：
+
+- **只从宿主机用域名测连通性会误判**。域名解析到的是新 IP，测出来是通的，
+  会得出「节点没死」的错误结论。必须测 mihomo 日志里那个**具体的旧 IP**。
+- **单独执行 `docker restart mihomo` 是无效的**。`cache.db` 在启动时被原样
+  读回，重启只是换一个进程去读同一份过期数据，看起来「重启过了」但什么都没变。
+  **必须先删缓存文件，再重启。**
+
+**已经自动化**：`deploy/gw-proxy-guard` 每 10 分钟探测一次出口，连续 2 次
+失败后自动清缓存重启。恢复时间从「人工发现 + 手动修」降到 10 分钟以内，
+且不会消耗 Grok 额度（探测直接问 mihomo，不走网关）。
+设计细节见该脚本头部注释。
+
 ## 5. 开机自启
 
 生产容器用 `restart: unless-stopped`（或 compose 里等价配置），
 服务器重启后 Docker 会自动拉起。
 
-需要注意 **mihomo / progrok 这类手工 `docker run` 起来的容器**
-也要带 `--restart unless-stopped`，否则重启后它们不会回来，
-链路断在第二层而网关毫无察觉——表现是 Grok 通道全部超时，
-其他通道正常。
+mihomo / progrok 已于 2026-08-31 纳入 compose，不再依赖手工 `docker run`。
+启动顺序由 `depends_on` 表达：
+
+```
+progrok → mihomo
+```
+
+这个顺序是**必须的**而非可选：progrok 的启动命令里带 `npm i -g progrok`，
+而容器 `HTTP_PROXY` 指向 `http://mihomo:7890`——mihomo 没就绪时 npm 装不上包，
+progrok 必然启动失败，靠 `restart: unless-stopped` 重试到成功为止。
+
+另外**容器名被显式锁死**（`container_name: mihomo` / `progrok`），这不是风格问题：
+progrok 的环境变量写死 `HTTP_PROXY=http://mihomo:7890`，数据库里渠道的上游地址
+写死 `http://progrok:18645/v1`，两者都按容器名解析。compose 默认生成的
+`deploy-mihomo-1` 这类名字会让它们解析不到，通道直接断。
+
+**部署分工**：`deploy/deploy.sh` 里的 `docker compose up -d --build gateway`
+只重建 gateway，不会碰 mihomo / progrok（gateway 刻意不 `depends_on` 它们）。
+改了这两个服务的配置后，需要显式执行：
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --env-file deploy/production.env up -d mihomo progrok
+```
+
+反过来，直接跑不带服务名的 `docker compose up -d` 会重建**全部五个**服务，
+包括数据库——生产环境别这么干。
 
 ## 6. 备份与回滚
 
@@ -243,10 +318,12 @@ curl -N http://localhost:8080/v1/chat/completions \
 
 ## 7. 已知遗留
 
-- mihomo / progrok 目前是手工 `docker run` 启动的，
-  **尚未纳入 docker-compose 统一管理**。正式化后应与网关栈一起编排，
-  并用 `depends_on` 表达启动顺序
+- ~~mihomo / progrok 手工启动，未纳入 compose~~
+  —— 2026-08-31 已解决，现已与网关栈统一编排
+- **代理层仍是单点**。mihomo 挂了整个 Grok 通道不可用，暂未做备用出口。
+  注意 `gw-proxy-guard` 只治「节点 IP 漂移」这一种故障，治不了机场整体故障——
+  那种情况它只记日志等人工介入，不会无脑重启把情况搞得更糟
 - 订阅额度与 grok.com 官网聊天**共享同一个每周额度池**，
   API 调用会消耗网页端可用的量，需要留意消耗速度
-- 代理层是单点。mihomo 挂了整个 Grok 通道不可用，
-  暂未做备用出口
+- 自愈日志在 `/var/log/gw-proxy-guard.log`，**目前没有接入告警**，
+  只有主动去看才知道它自愈过。要接告警的话这是唯一入口

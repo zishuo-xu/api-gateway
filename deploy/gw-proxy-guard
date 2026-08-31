@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# mihomo 出口通道自愈守卫
+#
+# 它治什么
+# --------
+# 机场节点会换 IP。mihomo 把「节点域名 -> 真实 IP」的解析结果持久化在
+# /opt/mihomo/cache.db 里，而这个缓存不会因为 IP 失效而自动作废——
+# 于是 mihomo 会一直拿旧 IP 去连，表现为网关侧 401 / upstream_error，
+# 上游体是 {"error":{"message":"fetch failed","type":"auth_error"}}。
+#
+# 2026-08-31 实际发生过一次：机场某个节点的 IP 换了新的，mihomo 抱着
+# 22 小时前的旧地址，通道整整断了一晚上。
+# 具体地址不写进公开仓库，排查时从 mihomo 日志里取当次的即可。
+#
+# 为什么探测不直接用 Grok 真实请求
+# --------------------------------
+# 一天 144 次探测 × 约 640 prompt tokens ≈ 9 万 tokens/天，白白吃掉
+# SuperGrok 订阅额度。而且它测的是整条链路，出口挂了和 OAuth 过期
+# 都表现为"失败"，分不清该修谁。
+#
+# 所以这里直接问 mihomo 自己「能不能出得去」：让它对全部节点做一次
+# 延迟测试，只要有一个节点能返回延迟数值，出口就是通的。
+# 不走网关、不碰 Grok 额度，且精准定位在出口这一层。
+#
+# 用法
+# ----
+#   ./gw-proxy-guard            # 由 cron 每 10 分钟调用
+#   ./gw-proxy-guard --verbose  # 手动跑，看过程
+#
+set -u
+
+LOG=/var/log/gw-proxy-guard.log
+STATE=/var/lib/gw-proxy-guard
+MIHOMO_API=http://127.0.0.1:9090
+CACHE_DB=/opt/mihomo/cache.db
+FAIL_FILE=$STATE/exit_fail_count
+LAST_FIX=$STATE/last_fix
+
+COOLDOWN_SEC=1800   # 两次恢复动作之间至少隔 30 分钟
+FAIL_THRESHOLD=2    # 连续失败 2 次（=20 分钟）才动手，避开瞬时抖动
+URLTEST_WAIT=60     # 重启后 mihomo 要重跑 url-test，期间测什么都是失败的
+
+VERBOSE=0
+[ "${1:-}" = "--verbose" ] && VERBOSE=1
+
+log() {
+    echo "$(date '+%F %T') $*" >>"$LOG"
+    [ "$VERBOSE" = 1 ] && echo "$*"
+}
+
+mkdir -p "$STATE"
+
+# 出口是否可用：让 mihomo 对 PROXY 组全部节点测一遍延迟。
+# 返回体形如 {"节点A": 344, "节点B": null, ...}，有任何一个数字即视为通。
+# 用 python 解析而不是 grep——节点名本身带数字（如"日本东京01"），grep 会误判。
+exit_ok() {
+    local raw
+    raw=$(curl -s -m 40 "$MIHOMO_API/group/PROXY/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
+    [ -z "$raw" ] && return 1
+    printf '%s' "$raw" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+ok = [v for v in d.values() if isinstance(v, (int, float))]
+sys.exit(0 if ok else 1)
+' 2>/dev/null
+}
+
+# ---------------------------------------------------------------- 主流程
+if exit_ok; then
+    echo 0 >"$FAIL_FILE"
+    log "出口正常"
+    exit 0
+fi
+
+n=$(cat "$FAIL_FILE" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$FAIL_FILE"
+log "出口探测失败 (连续 $n/$FAIL_THRESHOLD)"
+
+# 第一次失败先不动手：可能是机场瞬时抖动，或者 mihomo 正在重选节点
+if [ "$n" -lt "$FAIL_THRESHOLD" ]; then
+    log "未达阈值，下次再确认"
+    exit 0
+fi
+
+now=$(date +%s)
+last=$(cat "$LAST_FIX" 2>/dev/null || echo 0)
+if [ $((now - last)) -lt "$COOLDOWN_SEC" ]; then
+    log "距上次恢复仅 $((now - last))s (<${COOLDOWN_SEC}s)，跳过——避免在恢复过程中反复重启"
+    exit 0
+fi
+
+log "开始恢复：删除 DNS 缓存并重启 mihomo"
+rm -f "$CACHE_DB"
+docker restart mihomo >/dev/null 2>&1
+echo "$now" >"$LAST_FIX"
+
+# 必须等。刚重启的 mihomo 还没跑完 url-test，这时候探测必然失败，
+# 会把"正在自愈"误判成"恢复无效"，进而触发下一轮重启。
+log "等待 ${URLTEST_WAIT}s 让 mihomo 完成 url-test"
+sleep "$URLTEST_WAIT"
+
+if exit_ok; then
+    log "已自愈：出口恢复正常"
+    echo 0 >"$FAIL_FILE"
+else
+    log "恢复失败：清缓存重启后仍不通，需人工介入（多半是机场侧整体故障，不是 IP 漂移）"
+fi
