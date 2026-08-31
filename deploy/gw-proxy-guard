@@ -12,15 +12,18 @@
 # 22 小时前的旧地址，通道整整断了一晚上。
 # 具体地址不写进公开仓库，排查时从 mihomo 日志里取当次的即可。
 #
-# 为什么探测不直接用 Grok 真实请求
-# --------------------------------
-# 一天 144 次探测 × 约 640 prompt tokens ≈ 9 万 tokens/天，白白吃掉
-# SuperGrok 订阅额度。而且它测的是整条链路，出口挂了和 OAuth 过期
-# 都表现为"失败"，分不清该修谁。
+# 为什么这样探测
+# --------------
+# 不用 Grok 真实请求：一天 144 次 × 约 640 prompt tokens ≈ 9 万 tokens/天，
+# 白白吃掉订阅额度，而且出口挂和 OAuth 过期都表现为"失败"，分不清该修谁。
 #
-# 所以这里直接问 mihomo 自己「能不能出得去」：让它对全部节点做一次
-# 延迟测试，只要有一个节点能返回延迟数值，出口就是通的。
-# 不走网关、不碰 Grok 额度，且精准定位在出口这一层。
+# 用全组 delay 测试而不是单节点：试过 /proxies/{name}/delay，三种 URL 编码
+# 方式（quote / quote_plus / 不编码）全部返回 Resource not found，
+# 连 /proxies/{name} 查节点信息都找不到——mihomo 处理不了这种带 emoji 和
+# 竖线的节点名。而 /group/PROXY/delay 是好的。
+#
+# 全组测试还有个额外好处：它本身就带治疗作用。mihomo 测完会自动切到
+# 最快的节点，相当于顺手替我们做了一次修复，不用干等 5 分钟的 url-test。
 #
 # 用法
 # ----
@@ -50,42 +53,52 @@ log() {
 
 mkdir -p "$STATE"
 
-# 出口是否可用：让 mihomo 对 PROXY 组全部节点测一遍延迟。
-# 返回体形如 {"节点A": 344, "节点B": null, ...}，有任何一个数字即视为通。
+# 当前 url-test 选中的节点，仅用于记日志。
+current_node() {
+    curl -s -m 5 "$MIHOMO_API/proxies/PROXY" 2>/dev/null |
+        python3 -c 'import sys,json
+try:
+    print(json.load(sys.stdin).get("now","?"))
+except Exception:
+    print("?")' 2>/dev/null
+}
+
+# 全组延迟测试，输出 "可用数 总数"。
 # 用 python 解析而不是 grep——节点名本身带数字（如"日本东京01"），grep 会误判。
-exit_ok() {
+probe() {
     local raw
-    raw=$(curl -s -m 40 "$MIHOMO_API/group/PROXY/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
-    [ -z "$raw" ] && return 1
-    printf '%s' "$raw" | python3 -c '
-import sys, json
+    raw=$(curl -s -m 60 "$MIHOMO_API/group/PROXY/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
+    [ -z "$raw" ] && { echo "0 0"; return; }
+    printf '%s' "$raw" | python3 -c 'import sys,json
 try:
     d = json.load(sys.stdin)
 except Exception:
-    sys.exit(1)
-ok = [v for v in d.values() if isinstance(v, (int, float))]
-sys.exit(0 if ok else 1)
-' 2>/dev/null
+    print("0 0"); sys.exit()
+alive = sum(1 for v in d.values() if isinstance(v, (int, float)))
+print(f"{alive} {len(d)}")' 2>/dev/null
 }
 
 # ---------------------------------------------------------------- 主流程
-if exit_ok; then
+node=$(current_node)
+read -r alive total <<<"$(probe)"
+
+if [ "${alive:-0}" -gt 0 ]; then
     echo 0 >"$FAIL_FILE"
-    log "出口正常"
+    log "出口正常（可用 ${alive}/${total}，当前: $node）"
     exit 0
 fi
 
 n=$(cat "$FAIL_FILE" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" >"$FAIL_FILE"
-log "出口探测失败 (连续 $n/$FAIL_THRESHOLD)"
+log "出口不通（可用 ${alive:-0}/${total:-0}，当前: $node，连续 $n/$FAIL_THRESHOLD）"
 
-# 第一次失败先不动手：可能是机场瞬时抖动，或者 mihomo 正在重选节点
 if [ "$n" -lt "$FAIL_THRESHOLD" ]; then
     log "未达阈值，下次再确认"
     exit 0
 fi
 
+# 全组无一可用，按 DNS 缓存失效处理
 now=$(date +%s)
 last=$(cat "$LAST_FIX" 2>/dev/null || echo 0)
 if [ $((now - last)) -lt "$COOLDOWN_SEC" ]; then
@@ -93,18 +106,22 @@ if [ $((now - last)) -lt "$COOLDOWN_SEC" ]; then
     exit 0
 fi
 
-log "开始恢复：删除 DNS 缓存并重启 mihomo"
+log "全组无可用节点，按 DNS 缓存失效处理：删除缓存并重启 mihomo"
+# 必须删了这个再重启。单独 restart 是无效的：cache.db 在启动时被原样读回，
+# 等于换一个进程去读同一份过期数据。
 rm -f "$CACHE_DB"
 docker restart mihomo >/dev/null 2>&1
 echo "$now" >"$LAST_FIX"
 
-# 必须等。刚重启的 mihomo 还没跑完 url-test，这时候探测必然失败，
+# 刚重启的 mihomo 还没跑完 url-test，这时候探测必然失败，
 # 会把"正在自愈"误判成"恢复无效"，进而触发下一轮重启。
 log "等待 ${URLTEST_WAIT}s 让 mihomo 完成 url-test"
 sleep "$URLTEST_WAIT"
 
-if exit_ok; then
-    log "已自愈：出口恢复正常"
+node=$(current_node)
+read -r alive total <<<"$(probe)"
+if [ "${alive:-0}" -gt 0 ]; then
+    log "已自愈：出口恢复（可用 ${alive}/${total}，当前: $node）"
     echo 0 >"$FAIL_FILE"
 else
     log "恢复失败：清缓存重启后仍不通，需人工介入（多半是机场侧整体故障，不是 IP 漂移）"

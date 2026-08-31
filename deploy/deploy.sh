@@ -37,27 +37,35 @@ ssh aliyun "curl -sf -o /dev/null -w '进程: admin=%{http_code}\n' http://local
 # （容器重建丢了 grok-net 网络），但 /admin/ 照样返回 200，
 # 脚本报告"部署成功"，实际一调用就 502。进程活着 ≠ 服务可用。
 #
-# 发一条最小真实请求，会消耗极少量额度（一次 8 token 的补全），
-# 但远比"部署完以为没事、过几小时才发现通道是坏的"划算。
+# 失败会重试一次。机场节点会间歇性返回 503，单次失败就判部署失败会误报
+# （实测遇到过：同一分钟内前一次 503、后一次正常）。但也不能因此不验——
+# 那正是事故当天的状态。
+#
+# 每次验证消耗极少量额度（一次 8 token 的补全），但远比"部署完以为没事、
+# 过几小时才发现通道是坏的"划算。
+probe_channel() {
+    ssh aliyun 'set -a; . /opt/api-gateway/deploy/production.env; set +a
+        curl -s -m 60 -X POST http://localhost:8080/v1/chat/completions \
+            -H "Authorization: Bearer $DEMO_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"grok-4.6\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8}" 2>&1'
+}
+
 echo "验证真实通道（发一条最小请求）..."
-if ssh aliyun 'set -a; . /opt/api-gateway/deploy/production.env; set +a
-    resp=$(curl -s -m 60 -X POST http://localhost:8080/v1/chat/completions \
-        -H "Authorization: Bearer $DEMO_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"grok-4.6\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8}" 2>&1)
-    case "$resp" in
-        *"\"choices\""*)
-            echo "通道: grok-4.6 正常"
-            ;;
-        *)
-            echo "通道: grok-4.6 不通 —— 上游原文: $resp"
-            exit 1
-            ;;
-    esac'; then
-    echo "部署完成，通道已验证"
+if probe_channel | grep -q '"choices"'; then
+    echo "通道: grok-4.6 正常"
 else
-    echo ""
-    echo "部署动作已完成，但通道验证失败。上面是上游返回的原文——"
-    echo "这次部署不能算成功。常见原因见 docs/deployment.md 第 4 节。"
-    exit 1
+    echo "首次探测未通过，3 秒后重试（区分瞬时抖动与真故障）..."
+    sleep 3
+    resp=$(probe_channel)
+    if printf '%s' "$resp" | grep -q '"choices"'; then
+        echo "通道: grok-4.6 正常（重试通过，前一次是瞬时抖动）"
+    else
+        echo ""
+        echo "通道: grok-4.6 连续两次不通 —— 上游原文: $resp"
+        echo "部署动作已完成，但通道没通过，这次部署不能算成功。"
+        echo "常见原因见 docs/deployment.md 第 4 节。"
+        exit 1
+    fi
 fi
+echo "部署完成，通道已验证"
