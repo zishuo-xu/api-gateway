@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,39 @@ const (
 	mihomoTestNodeTimeout = 8000
 )
 
+// proxyDelayCache holds one full sweep of per-node delays.
+//
+// It exists because mihomo offers no way to read the delays it already knows.
+// Its per-node history array is empty in practice, and the periodic url-test
+// that picks the fastest node does not record what it measured. So the only
+// way to show a delay is to measure it — and measuring 70 nodes on every
+// two-second dashboard tick is not an option. Measure when asked, remember it,
+// and say how old the number is.
+type proxyDelayCache struct {
+	mu     sync.Mutex
+	delays map[string]int
+	at     time.Time
+}
+
+func (c *proxyDelayCache) load() (map[string]int, time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.delays, c.at
+}
+
+func (c *proxyDelayCache) store(d map[string]int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.delays = d
+	c.at = time.Now()
+}
+
+// delays returns the process-wide sweep cache, creating it on first use.
+func (s *Server) delays() *proxyDelayCache {
+	s.proxyOnce.Do(func() { s.proxyDelays = &proxyDelayCache{} })
+	return s.proxyDelays
+}
+
 // proxyNode is one selectable egress target, trimmed to what the page draws.
 // mihomo's /proxies payload carries far more per node (uuid, tfo, mptcp, full
 // history arrays...) and forwarding all of it would push several hundred KB to
@@ -62,10 +96,14 @@ type proxyStatus struct {
 	Nodes      []proxyNode `json:"nodes"`
 	Total      int         `json:"total"`
 	Alive      int         `json:"alive"`
-	// Tested marks the delays as freshly measured rather than left over from
-	// mihomo's own periodic probe. The page says which one it is showing,
-	// because a stale delay presented as current is worse than no delay.
+	// Tested marks the delays as measured by this very request rather than
+	// recalled from an earlier one.
 	Tested bool `json:"tested"`
+	// DelaysAgeSec is how stale the delays are, or -1 if this process has
+	// never run a sweep. The page needs it to tell "not measured yet" apart
+	// from "measured and did not answer" — two very different reasons to see
+	// a zero, and only one of them means the node is broken.
+	DelaysAgeSec int `json:"delays_age_sec"`
 }
 
 // mihomoProxies is the subset of GET /proxies we parse. The real payload has
@@ -237,32 +275,49 @@ func (s *Server) proxyStatus(ctx context.Context, test bool) proxyStatus {
 		}
 	}
 
-	// Live delays, when asked for. No url parameter on purpose: mihomo then
-	// probes against the URL configured on the group, which keeps the console
-	// and mihomo's own scheduling judging nodes by the same target.
-	delays := map[string]int{}
+	// Delays come from a fresh probe when asked for, and from the last sweep
+	// this process remembers otherwise. No url parameter on the probe path on
+	// purpose: mihomo then tests against the URL configured on the group, so
+	// the console and mihomo's own scheduling judge nodes by the same target.
+	delays, delaysAt := s.delays().load()
 	if test {
 		testCtx, testCancel := context.WithTimeout(ctx, mihomoTestTimeout)
 		defer testCancel()
-		path := "/group/" + st.AutoGroup + "/delay?timeout=" + strconv.Itoa(mihomoTestNodeTimeout)
-		if st.AutoGroup == "" {
-			path = "/group/" + group + "/delay?timeout=" + strconv.Itoa(mihomoTestNodeTimeout)
+		probe := st.AutoGroup
+		if probe == "" {
+			probe = group
 		}
+		path := "/group/" + probe + "/delay?timeout=" + strconv.Itoa(mihomoTestNodeTimeout)
+		fresh := map[string]int{}
 		if raw, err := s.mihomoGet(testCtx, path); err == nil {
-			_ = json.Unmarshal(raw, &delays)
-			st.Tested = true
+			if err := json.Unmarshal(raw, &fresh); err != nil {
+				log.Printf("proxy retest decode err: %v", err)
+				st.Error = "测速结果无法解析: " + err.Error()
+			} else {
+				delays = fresh
+				s.delays().store(delays)
+				delaysAt = time.Now()
+				st.Tested = true
+			}
 		} else {
-			// A failed sweep is not fatal: fall through and report the cached
-			// delays, flagged as stale, rather than blanking the page.
+			// A failed sweep is not fatal: fall through and report whatever
+			// the cache still holds, flagged as stale, rather than blanking
+			// the page.
 			log.Printf("proxy retest err: %v", err)
 			st.Error = "测速未完成: " + err.Error()
 		}
+	}
+	st.DelaysAgeSec = -1
+	if !delaysAt.IsZero() {
+		st.DelaysAgeSec = int(time.Since(delaysAt).Seconds())
 	}
 
 	for _, name := range g.All {
 		n := proxyNode{Name: name}
 		if p, ok := mp.Proxies[name]; ok {
 			n.Type = p.Type
+			// mihomo's history is normally empty, but if a build does populate
+			// it, a recorded result still beats nothing.
 			if d, ok := delays[name]; ok {
 				n.DelayMS = d
 			} else if len(p.History) > 0 {

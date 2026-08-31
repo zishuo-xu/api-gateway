@@ -30,6 +30,20 @@ const twoLayerProxies = `{
   }
 }`
 
+// noHistoryProxies is what mihomo actually returns: the history array that
+// looks like the natural place to read past delays from is simply empty. The
+// console therefore cannot rely on it, which is the whole reason the gateway
+// caches sweeps itself.
+const noHistoryProxies = `{
+  "proxies": {
+    "PROXY":  {"type":"Selector","now":"AUTO","all":["AUTO","node-a","node-b","node-c"]},
+    "AUTO":   {"type":"URLTest","now":"node-b","all":["node-a","node-b","node-c"]},
+    "node-a": {"type":"Shadowsocks","history":[]},
+    "node-b": {"type":"Shadowsocks","history":[]},
+    "node-c": {"type":"Shadowsocks","history":[]}
+  }
+}`
+
 // switchLog records the calls a test made into the stub controller.
 type switchLog struct {
 	method string
@@ -182,6 +196,76 @@ func TestProxyRetestFallsBackToHistoryWhenProbeFails(t *testing.T) {
 	// Still usable: history delays survive the failed sweep.
 	if st.Total != 4 {
 		t.Errorf("Total = %d, want 4: a failed probe must not empty the list", st.Total)
+	}
+}
+
+// mihomo keeps no usable record of the delays it measured, so the gateway has
+// to remember them itself. This pins the part that makes the page honest: an
+// age of -1 means "never measured", and the console must render that as
+// unknown rather than as every node being down.
+func TestProxyDelaysCachedAcrossCalls(t *testing.T) {
+	s, _ := mihomoStub(t, noHistoryProxies)
+
+	before := s.proxyStatus(context.Background(), false)
+	if before.DelaysAgeSec != -1 {
+		t.Errorf("DelaysAgeSec = %d, want -1 before any sweep", before.DelaysAgeSec)
+	}
+	if before.Alive != 0 {
+		t.Errorf("Alive = %d, want 0: with nothing measured, claiming nodes are "+
+			"down would be a lie in the other direction", before.Alive)
+	}
+
+	swept := s.proxyStatus(context.Background(), true)
+	if swept.DelaysAgeSec != 0 {
+		t.Errorf("DelaysAgeSec = %d, want 0 right after a sweep", swept.DelaysAgeSec)
+	}
+
+	// A plain read later must recall the numbers without probing again.
+	after := s.proxyStatus(context.Background(), false)
+	if after.Tested {
+		t.Error("Tested = true on a plain read: it should be reporting the cache")
+	}
+	if after.DelaysAgeSec < 0 {
+		t.Fatal("DelaysAgeSec = -1: the sweep was not remembered")
+	}
+	got := map[string]int{}
+	for _, n := range after.Nodes {
+		got[n.Name] = n.DelayMS
+	}
+	if got["node-a"] != 150 || got["node-b"] != 45 {
+		t.Errorf("cached delays = %v, want node-a=150 node-b=45", got)
+	}
+	if after.Alive != 2 {
+		t.Errorf("Alive = %d, want 2", after.Alive)
+	}
+}
+
+// A sweep that fails must leave an earlier good result in place. Wiping the
+// cache on error would turn a transient mihomo hiccup into "every node is
+// down", which is exactly the wrong thing to show someone mid-incident.
+func TestProxyFailedSweepKeepsPreviousDelays(t *testing.T) {
+	s, _ := mihomoStub(t, twoLayerProxies)
+	if st := s.proxyStatus(context.Background(), true); st.Alive != 2 {
+		t.Fatalf("warm-up sweep: Alive = %d, want 2", st.Alive)
+	}
+
+	s.Cfg.MihomoAutoGroup = "MISSING"
+	st := s.proxyStatus(context.Background(), true)
+	if st.Tested {
+		t.Error("Tested = true after a failed sweep")
+	}
+	if st.Error == "" {
+		t.Error("Error is empty after a failed sweep")
+	}
+	if st.DelaysAgeSec < 0 {
+		t.Error("delays were dropped: the previous good sweep should survive")
+	}
+	got := map[string]int{}
+	for _, n := range st.Nodes {
+		got[n.Name] = n.DelayMS
+	}
+	if got["node-a"] != 150 {
+		t.Errorf("delay[node-a] = %d, want the cached 150", got["node-a"])
 	}
 }
 

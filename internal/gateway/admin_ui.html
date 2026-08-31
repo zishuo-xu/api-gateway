@@ -2538,6 +2538,7 @@ window.addEventListener("online", function () { connOK(); if (!document.hidden) 
    pane is the one place that talks to it. */
 var pxCache = null;
 var pxQuery = "";
+var pxAutoSwept = false;   // 首次进入时自动测过一次，之后靠手动按钮
 
 async function refreshEgress() {
   var on = document.getElementById("px-on");
@@ -2556,6 +2557,16 @@ async function refreshEgress() {
     }
     pxCache = st;
     renderEgress(st);
+    // mihomo records no delays of its own, so the first visit has nothing to
+    // show until something measures it. Do that once, automatically — an
+    // operator opening this page wants to know which nodes work, and a table
+    // of dashes is not an answer. Only once: later refreshes reuse the
+    // gateway's cache unless the button is pressed.
+    if (!pxAutoSwept && st.delays_age_sec < 0) {
+      pxAutoSwept = true;
+      var rt = document.getElementById("px-retest");
+      if (rt) retestEgress(rt);
+    }
   } catch (e) {
     connFail();
     var tb = document.getElementById("px-nodes");
@@ -2569,13 +2580,21 @@ function renderEgress(st) {
   var mode = document.getElementById("px-mode");
   if (mode) mode.textContent = st.is_auto ? "自动选最快" : "手动锁定";
   var alive = document.getElementById("px-alive");
-  if (alive) alive.textContent = st.alive + " / " + st.total;
+  if (alive) {
+    // age < 0 means nothing has been measured yet. Showing "0 / 72" would
+    // read as a total outage when it really means nobody has looked.
+    alive.textContent = st.delays_age_sec < 0 ? "未测" : (st.alive + " / " + st.total);
+  }
   var ver = document.getElementById("px-ver");
   if (ver) ver.textContent = st.version || "-";
   var sub = document.getElementById("px-sub");
-  if (sub) sub.textContent = st.error
-    ? st.error
-    : (st.tested ? "延迟为本次实时测得" : "延迟来自 mihomo 最近一次自动测速");
+  if (sub) {
+    sub.textContent = st.error
+      ? st.error
+      : (st.delays_age_sec < 0
+        ? "尚未测速，正在首次测量…"
+        : "延迟测于 " + fmtAge(st.delays_age_sec) + "前");
+  }
 
   var warn = document.getElementById("px-warn");
   if (warn) {
@@ -2626,23 +2645,34 @@ function renderEgressRows(st) {
     tb.innerHTML = "<tr><td colspan='3' class='td-empty'>没有匹配的节点</td></tr>";
     return;
   }
+  var measured = st.delays_age_sec >= 0;
   var html = "";
   for (var i = 0; i < rows.length; i++) {
     var n = rows[i];
     var isCur = n.name === st.current;
     html += "<tr><td>" + escapeHtml(n.name) +
       (isCur ? " <span class='chip'>当前</span>" : "") + "</td>" +
-      "<td class='mono'>" + delayCell(n.delay_ms) + "</td>" +
+      "<td class='mono'>" + delayCell(n.delay_ms, measured) + "</td>" +
       "<td class='ops'><button type='button' class='lk' data-px=\"" + escapeHtml(n.name) + "\"" +
       (isCur ? " disabled" : "") + ">" + (isCur ? "使用中" : "切到这个") + "</button></td></tr>";
   }
   tb.innerHTML = html;
 }
 
-function delayCell(ms) {
+// "Unknown" and "unreachable" both arrive as a zero delay, so the age of the
+// last sweep decides which one to show. Calling a never-measured node
+// unreachable would send someone hunting a fault that may not exist.
+function delayCell(ms, measured) {
+  if (!measured) return "<span class='d-none'>—</span>";
   if (!ms) return "<span class='d-none'>未测通</span>";
   var cls = ms < 200 ? "d-good" : (ms < 600 ? "d-ok" : "d-bad");
   return "<span class='" + cls + "'>" + ms + " ms</span>";
+}
+
+function fmtAge(sec) {
+  if (sec < 60) return sec + " 秒";
+  if (sec < 3600) return Math.floor(sec / 60) + " 分钟";
+  return Math.floor(sec / 3600) + " 小时";
 }
 
 async function switchEgress(name, btn) {
