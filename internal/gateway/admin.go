@@ -1320,8 +1320,17 @@ type logRow struct {
 	CreatedAt    string `json:"created_at"`
 }
 
-// adminLogs returns the most recent request log lines.
+// adminLogs returns the most recent request log lines. The optional "limit"
+// query parameter (default 50, capped at 500) lets the console pull a deeper
+// window: internet scanner noise floods the tail, so a shallow slice can hold
+// almost no real traffic for the console's filtered views to show.
 func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
 	rows, err := s.DB.QueryContext(r.Context(), `
 		SELECT id, COALESCE(api_key_id,0), method, path, COALESCE(upstream,''), status_code,
 		       latency_ms, cached, COALESCE(model,''),
@@ -1331,8 +1340,8 @@ func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(prompt_cache_hit_tokens,0), COALESCE(prompt_cache_write_tokens,0),
 		       COALESCE(reject_reason,''),
 		       created_at
-		FROM request_logs ORDER BY id DESC LIMIT 50
-	`)
+		FROM request_logs ORDER BY id DESC LIMIT $1
+	`, limit)
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return

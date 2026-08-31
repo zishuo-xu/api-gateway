@@ -82,6 +82,15 @@
   .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
   .panel h2 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
   .sec-sub { font-size: 12px; color: var(--muted); }
+  /* Log filter segmented buttons: all / business / scan noise. */
+  .logfilter { display: inline-flex; gap: 5px; }
+  .logfilter button { appearance: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
+    background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s; }
+  .logfilter button:hover { color: var(--txt); border-color: var(--line2); }
+  .logfilter button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(88,166,255,.3); }
+  .logfilter button[aria-pressed="true"] { color: #06121f; background: var(--accent); border-color: var(--accent); }
+  .logfilter .n { opacity: .7; font-weight: 500; margin-left: 4px; }
   canvas { width: 100%; height: 220px; display: block; }
   .badges { display: flex; flex-wrap: wrap; gap: 8px; }
   .badge { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line2);
@@ -683,7 +692,12 @@
   <div class="panel">
     <div class="sec-head">
       <h2>最近请求日志</h2>
-      <div class="sec-sub">最近 50 条，2 秒自动刷新</div>
+      <div class="logfilter" id="log-filter" role="group" aria-label="日志过滤">
+        <button type="button" data-logsfilter="all" aria-pressed="true">全部<span class="n" id="lf-n-all"></span></button>
+        <button type="button" data-logsfilter="biz" aria-pressed="false" title="带 API key 的请求，即真实业务流量">业务<span class="n" id="lf-n-biz"></span></button>
+        <button type="button" data-logsfilter="noise" aria-pressed="false" title="不带 key 的匿名请求，基本都是互联网扫描器探测（/.env、/login 等）">扫描噪音<span class="n" id="lf-n-noise"></span></button>
+      </div>
+      <div class="sec-sub" id="log-sub">最近 200 条，2 秒自动刷新</div>
     </div>
     <table>
       <thead><tr><th>时间</th><th>方法</th><th>路径</th><th>上游</th><th>状态</th><th>延迟</th><th>首token</th><th>吞吐</th><th>模型</th><th>Token</th><th title="输入缓存：上游 prompt 前缀缓存命中率，命中部分按折扣计费。HIT 表示网关自身的响应缓存命中，此时请求根本没打到上游。">缓存</th><th>流式</th></tr></thead>
@@ -1571,7 +1585,7 @@ async function refresh() {
 
   if (activeTab === "logs") {
     try {
-      const logs = await getJSON("/admin/logs");
+      const logs = await getJSON("/admin/logs?limit=200");
       connOK();
       // Rows that arrived since the last paint get a one-shot highlight so the
       // eye can find what is new in a table that otherwise looks static.
@@ -1586,7 +1600,22 @@ async function refresh() {
       seenLogIds = {};
       for (var si = 0; si < logs.length; si++) seenLogIds[logs[si].id] = true;
 
-      var logRows = logs.map(function (l) {
+      // 过滤分段：不带 key 的匿名请求（api_key_id 为空）基本都是互联网扫描器
+      // 探测（/.env、/login、/SDK/webLanguage 这类路径爆破），带 key 的才是
+      // 真实业务流量。计数徽标始终按全量统计，切换过滤只是改显示的子集。
+      var bizN = 0;
+      for (var ci = 0; ci < logs.length; ci++) { if (logs[ci].api_key_id > 0) bizN++; }
+      var noiseN = logs.length - bizN;
+      setLogCount("lf-n-all", logs.length);
+      setLogCount("lf-n-biz", bizN);
+      setLogCount("lf-n-noise", noiseN);
+      var shown = logs;
+      if (logFilter === "biz") shown = logs.filter(function (l) { return l.api_key_id > 0; });
+      else if (logFilter === "noise") shown = logs.filter(function (l) { return !l.api_key_id; });
+      var logSub = document.getElementById("log-sub");
+      if (logSub) logSub.textContent = "最近 " + logs.length + " 条，显示 " + shown.length + " 条，2 秒自动刷新";
+
+      var logRows = shown.map(function (l) {
         // TTFT: only meaningful for streaming. Show "—" for non-streaming,
         // cache hits, and rejections that never reached an upstream.
         var ttft = "";
@@ -1656,7 +1685,7 @@ async function refresh() {
           "<td>" + (l.is_stream ? '<span style="color:var(--purple)">SSE</span>' : '<span class="muted">—</span>') + "</td>" +
           "</tr>";
       }).join("");
-      setRows("logs", logRows || emptyRow(12, "该区间内没有请求"));
+      setRows("logs", logRows || emptyRow(12, logFilter === "all" ? "该区间内没有请求" : "该过滤条件下没有请求"));
     } catch (e) {
       connFail();
       showSkeleton("logs", 12, 4);
@@ -2388,6 +2417,29 @@ function resetForm() {
    never looks stale. */
 var seenLogIds = {};
 var seenLogInit = false;
+// 请求日志面板的过滤档位："all" 全部 / "biz" 业务（带 key）/ "noise" 扫描噪音。
+var logFilter = "all";
+
+function setLogCount(id, n) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = n > 0 ? " " + n : "";
+}
+
+// 过滤按钮：点击切换档位并立刻刷新当前面板（不必等 2 秒轮询）。
+(function bindLogFilter() {
+  var bar = document.getElementById("log-filter");
+  if (!bar) return;
+  bar.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("button[data-logsfilter]") : null;
+    if (!b) return;
+    logFilter = b.dataset.logsfilter;
+    var btns = bar.querySelectorAll("button[data-logsfilter]");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute("aria-pressed", btns[i] === b ? "true" : "false");
+    }
+    refresh();
+  });
+})();
 
 function startPoll() {
   if (pollTimer === null) {
