@@ -53,6 +53,20 @@ type Config struct {
 	// IPRPS caps requests per client IP. 0 disables that dimension — useful when
 	// everything arrives through one NAT or egress gateway.
 	IPRPS int
+	// MihomoAPI is the base URL of a mihomo external controller, e.g.
+	// http://mihomo:9090. Empty disables the console's egress page entirely —
+	// this gateway has no mihomo dependency, the page is only wired up when
+	// someone actually runs one alongside it.
+	// Keep it on a private network: the controller is unauthenticated and
+	// exposes every upstream credential the proxy holds.
+	MihomoAPI string
+	// MihomoGroup is the proxy group the console switches. It must be a
+	// `select` group: mihomo's url-test groups re-pick the fastest node every
+	// interval and would silently overwrite a manual choice within minutes.
+	MihomoGroup string
+	// MihomoAutoGroup is the url-test group offered as the "give control back
+	// to mihomo" option. Empty hides that option.
+	MihomoAutoGroup string
 }
 
 // Load reads config from environment with sensible defaults.
@@ -75,6 +89,9 @@ func Load() *Config {
 		UnifiedPrefix:      getenv("UNIFIED_PREFIX", "/v1"),
 		RouteReloadSec:     getenvInt("ROUTE_RELOAD_SEC", 10),
 		IPRPS:              getenvInt("IP_RPS", 0),
+		MihomoAPI:          getenv("MIHOMO_API", ""),
+		MihomoGroup:        getenv("MIHOMO_GROUP", "PROXY"),
+		MihomoAutoGroup:    getenv("MIHOMO_AUTO_GROUP", "AUTO"),
 	}
 }
 

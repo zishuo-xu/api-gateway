@@ -405,6 +405,23 @@
     color: var(--txt); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; outline: none;
     font-variant-numeric: tabular-nums; }
   input.mini:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+
+  /* ---------- egress pane (mihomo) ----------
+     A subscription easily holds 70+ nodes, so the list scrolls inside the
+     panel instead of stretching the page to a few thousand pixels. */
+  .scroll-y { max-height: 520px; overflow-y: auto; }
+  .egress-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .egress-search { background: var(--bg); border: 1px solid var(--line2); color: var(--txt);
+    border-radius: 8px; padding: 8px 11px; font-size: 13px; outline: none; width: 240px;
+    box-sizing: border-box; }
+  .egress-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+  /* Delay colours: green/amber/red by round-trip time, and a flat grey for a
+     node that did not answer at all — "no answer" must not look like "fast". */
+  .d-good { color: var(--green); }
+  .d-ok { color: var(--yellow); }
+  .d-bad { color: var(--red); }
+  .d-none { color: var(--dim); }
+  .egress-note { font-size: 12px; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -420,18 +437,19 @@
     <span class="dot"></span><span>网关运行中</span>
     <span class="sep">·</span><span id="uptime">-</span>
     <span class="sep">·</span><span id="clock">-</span>
-    <span class="sep">·</span><span class="kbd-hint" title="快捷键：Alt+←/→ 循环切换页签，数字键 1-7 直达">⌥←→ 切页签</span>
+    <span class="sep">·</span><span class="kbd-hint" title="快捷键：Alt+←/→ 循环切换页签，数字键 1-8 直达">⌥←→ 切页签</span>
     <span class="sep">·</span><button type="button" class="lk" onclick="adminLogout()">退出</button>
   </div>
 </header>
 
 <nav class="tabs" role="tablist" aria-label="控制台分区">
-  <button type="button" class="tab" role="tab" data-tab="overview" aria-selected="true" aria-controls="pane-overview" title="Alt+←/→ 或数字键 1-7 切换页签">总览</button>
+  <button type="button" class="tab" role="tab" data-tab="overview" aria-selected="true" aria-controls="pane-overview" title="Alt+←/→ 或数字键 1-8 切换页签">总览</button>
   <button type="button" class="tab" role="tab" data-tab="routes" aria-selected="false" aria-controls="pane-routes">路由配置 <span class="n" id="n-routes">0</span></button>
   <button type="button" class="tab" role="tab" data-tab="keys" aria-selected="false" aria-controls="pane-keys">API Keys <span class="n" id="n-keys">0</span></button>
   <button type="button" class="tab" role="tab" data-tab="usage" aria-selected="false" aria-controls="pane-usage">用量看板</button>
   <button type="button" class="tab" role="tab" data-tab="playground" aria-selected="false" aria-controls="pane-playground">调试台</button>
   <button type="button" class="tab" role="tab" data-tab="logs" aria-selected="false" aria-controls="pane-logs">请求日志</button>
+  <button type="button" class="tab" role="tab" data-tab="egress" aria-selected="false" aria-controls="pane-egress" id="tab-egress">出口代理</button>
   <button type="button" class="tab" role="tab" data-tab="guide" aria-selected="false" aria-controls="pane-guide">接入指南</button>
 </nav>
 
@@ -706,6 +724,60 @@
       <tr><td colspan="12"><span class="sk-bar" style="width:52%"></span></td></tr>
       <tr><td colspan="12"><span class="sk-bar" style="width:64%"></span></td></tr></tbody>
     </table>
+  </div>
+  </section>
+
+  <section class="tabpane" data-pane="egress" id="pane-egress" role="tabpanel">
+  <!-- Shown when MIHOMO_API is unset. Most deployments run no mihomo at all,
+       so the tab hides itself rather than presenting an empty panel. -->
+  <div class="panel" id="px-off" style="display:none">
+    <div class="sec-head"><h2>出口代理</h2></div>
+    <div class="td-empty">
+      未启用。给网关设置 <code>MIHOMO_API</code>（例如 <code>http://mihomo:9090</code>，走容器内网）后本页签自动出现。
+    </div>
+  </div>
+
+  <div id="px-on">
+    <div class="kpis" style="grid-template-columns: repeat(4, minmax(0,1fr));">
+      <div class="card"><div class="label">当前出口</div><div class="value" id="px-cur" style="font-size:15px">-</div></div>
+      <div class="card c-accent"><div class="label">调度模式</div><div class="value accent" id="px-mode">-</div></div>
+      <div class="card c-green"><div class="label">可用节点</div><div class="value green" id="px-alive">-</div></div>
+      <div class="card"><div class="label">mihomo 版本</div><div class="value" id="px-ver">-</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <div class="sec-head">
+        <h2>出口通道</h2>
+        <div class="sec-sub" id="px-sub">读取中…</div>
+      </div>
+
+      <!-- The one misconfiguration that makes this page lie: a manual switch
+           against a url-test group succeeds, then gets silently reverted at
+           the next interval. Say it here rather than let the operator decide
+           the button is broken. -->
+      <div class="note" id="px-warn" style="display:none">
+        <div class="note-h" id="px-warn-h"></div>
+        <div id="px-warn-b"></div>
+      </div>
+
+      <div class="egress-bar">
+        <button type="button" class="btn ghost" id="px-auto">切回自动</button>
+        <input type="text" class="egress-search" id="px-q" placeholder="搜索节点…" />
+        <button type="button" class="btn-sm" id="px-retest">重新测速</button>
+        <span class="egress-note" id="px-note"></span>
+      </div>
+
+      <div class="scroll-y">
+        <table>
+          <thead><tr><th>节点</th><th style="width:110px">延迟</th><th style="width:96px">操作</th></tr></thead>
+          <tbody id="px-nodes">
+            <tr><td colspan="3"><span class="sk-bar" style="width:70%"></span></td></tr>
+            <tr><td colspan="3"><span class="sk-bar" style="width:88%"></span></td></tr>
+            <tr><td colspan="3"><span class="sk-bar" style="width:52%"></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
   </section>
 
@@ -1582,6 +1654,9 @@ async function refresh() {
 
   if (activeTab === "usage") refreshUsage();
   if (activeTab === "playground") fillPlaygroundRoutes();
+  // Only while the pane is open: the node list is the largest payload the
+  // console fetches, and nothing about it is needed anywhere else.
+  if (activeTab === "egress") refreshEgress();
 
   if (activeTab === "logs") {
     try {
@@ -2456,10 +2531,185 @@ document.addEventListener("visibilitychange", function () {
 });
 window.addEventListener("online", function () { connOK(); if (!document.hidden) startPoll(); });
 
-/* Keyboard: Alt+ArrowLeft/Right or plain 1..7 switch panes without reaching
+/* ---------- egress (mihomo) ----------
+   Every call goes through the gateway rather than straight to mihomo: the
+   controller has no authentication of its own, so the only safe way to reach
+   it is over the container network, and the gateway is already on it. This
+   pane is the one place that talks to it. */
+var pxCache = null;
+var pxQuery = "";
+
+async function refreshEgress() {
+  var on = document.getElementById("px-on");
+  var off = document.getElementById("px-off");
+  var tab = document.getElementById("tab-egress");
+  try {
+    const st = await getJSON("/admin/proxy");
+    connOK();
+    if (!st.configured) {
+      // No mihomo configured: drop the tab entirely rather than leaving an
+      // empty panel for a feature this deployment does not run.
+      if (on) on.style.display = "none";
+      if (off) off.style.display = "block";
+      if (tab) tab.style.display = "none";
+      return;
+    }
+    pxCache = st;
+    renderEgress(st);
+  } catch (e) {
+    connFail();
+    var tb = document.getElementById("px-nodes");
+    if (tb) tb.innerHTML = "<tr><td colspan='3' class='td-error'>读取出口状态失败</td></tr>";
+  }
+}
+
+function renderEgress(st) {
+  var cur = document.getElementById("px-cur");
+  if (cur) cur.textContent = st.is_auto ? (st.auto_node || "自动") : (st.current || "-");
+  var mode = document.getElementById("px-mode");
+  if (mode) mode.textContent = st.is_auto ? "自动选最快" : "手动锁定";
+  var alive = document.getElementById("px-alive");
+  if (alive) alive.textContent = st.alive + " / " + st.total;
+  var ver = document.getElementById("px-ver");
+  if (ver) ver.textContent = st.version || "-";
+  var sub = document.getElementById("px-sub");
+  if (sub) sub.textContent = st.error
+    ? st.error
+    : (st.tested ? "延迟为本次实时测得" : "延迟来自 mihomo 最近一次自动测速");
+
+  var warn = document.getElementById("px-warn");
+  if (warn) {
+    if (st.group_type && st.group_type !== "Selector") {
+      warn.style.display = "block";
+      document.getElementById("px-warn-h").textContent =
+        "「" + st.group + "」是 " + st.group_type + " 组，手动切换会被自动覆盖";
+      document.getElementById("px-warn-b").innerHTML =
+        "<ul><li>这类组会周期重测延迟并切到最快的节点，手动选的节点活不过一个周期。</li>" +
+        "<li>要能锁定，把出口组改成 <code>select</code>，再挂一个 <code>url-test</code> 组做自动。</li></ul>";
+    } else {
+      warn.style.display = "none";
+    }
+  }
+
+  var autoBtn = document.getElementById("px-auto");
+  if (autoBtn) {
+    autoBtn.disabled = !!st.is_auto;
+    autoBtn.textContent = st.is_auto ? "当前已是自动模式" : "切回自动（" + (st.auto_group || "AUTO") + "）";
+  }
+  var note = document.getElementById("px-note");
+  if (note) {
+    note.textContent = st.is_auto
+      ? "当前由 mihomo 自动挑最快的节点"
+      : "已锁定，mihomo 不会再自动改选";
+  }
+  renderEgressRows(st);
+}
+
+function renderEgressRows(st) {
+  var tb = document.getElementById("px-nodes");
+  if (!tb) return;
+  var q = pxQuery.trim().toLowerCase();
+  var rows = (st.nodes || []).filter(function (n) {
+    // AUTO is offered by the button above; a second, identical row here would
+    // only make the two look like different things.
+    if (n.name === st.auto_group) return false;
+    return !q || n.name.toLowerCase().indexOf(q) >= 0;
+  });
+  rows.sort(function (a, b) {
+    // Nodes that did not answer at all sort last, however few milliseconds
+    // the responding ones report.
+    var da = a.delay_ms > 0 ? a.delay_ms : 1e9;
+    var db = b.delay_ms > 0 ? b.delay_ms : 1e9;
+    return da - db;
+  });
+  if (!rows.length) {
+    tb.innerHTML = "<tr><td colspan='3' class='td-empty'>没有匹配的节点</td></tr>";
+    return;
+  }
+  var html = "";
+  for (var i = 0; i < rows.length; i++) {
+    var n = rows[i];
+    var isCur = n.name === st.current;
+    html += "<tr><td>" + escapeHtml(n.name) +
+      (isCur ? " <span class='chip'>当前</span>" : "") + "</td>" +
+      "<td class='mono'>" + delayCell(n.delay_ms) + "</td>" +
+      "<td class='ops'><button type='button' class='lk' data-px=\"" + escapeHtml(n.name) + "\"" +
+      (isCur ? " disabled" : "") + ">" + (isCur ? "使用中" : "切到这个") + "</button></td></tr>";
+  }
+  tb.innerHTML = html;
+}
+
+function delayCell(ms) {
+  if (!ms) return "<span class='d-none'>未测通</span>";
+  var cls = ms < 200 ? "d-good" : (ms < 600 ? "d-ok" : "d-bad");
+  return "<span class='" + cls + "'>" + ms + " ms</span>";
+}
+
+async function switchEgress(name, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "切换中…"; }
+  try {
+    const r = await fetch("/admin/proxy", {
+      method: "PUT",
+      headers: Object.assign({}, H, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ name: name })
+    });
+    if (r.status === 403) { sessionLost(); return; }
+    const st = await r.json();
+    if (!r.ok) toast(st.error || ("切换失败: " + r.status), "err");
+    else { toast("已切到 " + name, "ok"); pxCache = st; }
+  } catch (e) {
+    toast("切换失败: " + e.message, "err");
+  } finally {
+    // Re-render rather than restore the label: a successful switch moves the
+    // "current" marker to another row, and a failed one needs its button
+    // re-enabled. Both fall out of a single repaint.
+    if (pxCache) renderEgress(pxCache);
+  }
+}
+
+async function retestEgress(btn) {
+  btn.disabled = true; btn.classList.add("busy"); btn.textContent = "测速中…";
+  var note = document.getElementById("px-note");
+  if (note) note.textContent = "正在逐个探测节点，约需十几秒…";
+  try {
+    const r = await fetch("/admin/proxy/retest", { method: "POST", headers: H });
+    if (r.status === 403) { sessionLost(); return; }
+    const st = await r.json();
+    pxCache = st;
+    toast(st.error ? st.error : ("测速完成，可用 " + st.alive + "/" + st.total),
+      st.error ? "err" : "ok");
+  } catch (e) {
+    toast("测速失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "重新测速";
+    if (pxCache) renderEgress(pxCache);
+  }
+}
+
+(function bindEgress() {
+  var q = document.getElementById("px-q");
+  if (q) q.addEventListener("input", function () {
+    pxQuery = q.value;
+    if (pxCache) renderEgressRows(pxCache);
+  });
+  var rt = document.getElementById("px-retest");
+  if (rt) rt.addEventListener("click", function () { retestEgress(rt); });
+  var au = document.getElementById("px-auto");
+  if (au) au.addEventListener("click", function () {
+    if (pxCache && pxCache.auto_group) switchEgress(pxCache.auto_group, au);
+  });
+  // Delegated: the node table is rebuilt on every refresh, so per-row
+  // handlers would be thrown away with the rows they were bound to.
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest("button.lk[data-px]") : null;
+    if (b) switchEgress(b.getAttribute("data-px"), b);
+  });
+})();
+
+/* Keyboard: Alt+ArrowLeft/Right or plain 1..8 switch panes without reaching
    for the mouse. Ignored while typing in a field. */
 (function bindTabKeys() {
-  var ORDER = ["overview", "routes", "keys", "usage", "playground", "logs", "guide"];
+  var ORDER = ["overview", "routes", "keys", "usage", "playground", "logs", "egress", "guide"];
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     var typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
@@ -2467,7 +2717,7 @@ window.addEventListener("online", function () { connOK(); if (!document.hidden) 
     var idx = ORDER.indexOf(activeTab);
     if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); switchTab(ORDER[(idx + 1) % ORDER.length], true); }
     else if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); switchTab(ORDER[(idx - 1 + ORDER.length) % ORDER.length], true); }
-    else if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "7") {
+    else if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "8") {
       switchTab(ORDER[parseInt(e.key, 10) - 1], true);
     }
   });

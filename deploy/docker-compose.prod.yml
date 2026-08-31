@@ -41,6 +41,12 @@ services:
       UNIFIED_PREFIX: "/v1"
       QUOTA_FLUSH_SEC: "10"
       INJECT_STREAM_USAGE: "true"
+      # 出口代理页。走容器内网调 mihomo 的控制 API，9090 只映射了回环地址，
+      # 公网与容器外都够不着。留空则控制台自动隐藏该页签。
+      MIHOMO_API: http://mihomo:9090
+      # 必须是 select 组：url-test 组会周期重选最快节点，手动切换活不过一个周期。
+      MIHOMO_GROUP: PROXY
+      MIHOMO_AUTO_GROUP: AUTO
     depends_on:
       - redis
       - postgres

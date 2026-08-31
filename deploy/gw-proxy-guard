@@ -20,10 +20,19 @@
 # 用全组 delay 测试而不是单节点：试过 /proxies/{name}/delay，三种 URL 编码
 # 方式（quote / quote_plus / 不编码）全部返回 Resource not found，
 # 连 /proxies/{name} 查节点信息都找不到——mihomo 处理不了这种带 emoji 和
-# 竖线的节点名。而 /group/PROXY/delay 是好的。
+# 竖线的节点名。而 /group/{group}/delay 是好的。
 #
-# 全组测试还有个额外好处：它本身就带治疗作用。mihomo 测完会自动切到
-# 最快的节点，相当于顺手替我们做了一次修复，不用干等 5 分钟的 url-test。
+# 2026-09-01 起探测 AUTO 组而不是 PROXY 组
+# ----------------------------------------
+# 代理组改成了双层（PROXY=select 手动层 / AUTO=url-test 自动层）。
+# 探测必须落到 AUTO 这一层，原因有二：
+#
+#   1. PROXY 现在是 select 组，它不会自动改选，对它做 delay 测试起不到
+#      "顺手切到最快节点"的治疗作用，只剩检测意义。
+#   2. 反过来，PROXY 被手动锁死在某个节点上之后，AUTO 组测得再欢也救不了
+#      出口——流量根本不走 AUTO。所以这里补了一条新逻辑（见下面主流程）：
+#      锁定节点挂了、但 AUTO 组里还有别的节点活着时，自动把 PROXY 切回 AUTO。
+#      这是救命动作，只在"整体没病、单节点病死"时触发，不碰缓存、不重启。
 #
 # 用法
 # ----
@@ -53,8 +62,8 @@ log() {
 
 mkdir -p "$STATE"
 
-# 当前 url-test 选中的节点，仅用于记日志。
-current_node() {
+# PROXY 当前选中的是什么：可能是 "AUTO"，也可能是某个具体节点名。
+current_selection() {
     curl -s -m 5 "$MIHOMO_API/proxies/PROXY" 2>/dev/null |
         python3 -c 'import sys,json
 try:
@@ -63,35 +72,85 @@ except Exception:
     print("?")' 2>/dev/null
 }
 
-# 全组延迟测试，输出 "可用数 总数"。
-# 用 python 解析而不是 grep——节点名本身带数字（如"日本东京01"），grep 会误判。
-probe() {
-    local raw
-    raw=$(curl -s -m 60 "$MIHOMO_API/group/PROXY/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
-    [ -z "$raw" ] && { echo "0 0"; return; }
-    printf '%s' "$raw" | python3 -c 'import sys,json
+# 真正连出去的那个节点。PROXY 选了 AUTO 时要再往下挖一层才有信息量。
+resolve_node() {
+    local sel="$1"
+    if [ "$sel" = "AUTO" ]; then
+        curl -s -m 5 "$MIHOMO_API/proxies/AUTO" 2>/dev/null |
+            python3 -c 'import sys,json
 try:
-    d = json.load(sys.stdin)
+    print(json.load(sys.stdin).get("now","?"))
 except Exception:
-    print("0 0"); sys.exit()
-alive = sum(1 for v in d.values() if isinstance(v, (int, float)))
-print(f"{alive} {len(d)}")' 2>/dev/null
+    print("?")' 2>/dev/null
+    else
+        printf '%s' "$sel"
+    fi
+}
+
+# 把 PROXY 切到指定选项。节点名走的是 JSON body 不是 URL，
+# 所以带 emoji 和竖线也不会像 /proxies/{name}/delay 那样踩编码坑。
+switch_to() {
+    curl -s -m 5 -X PUT "$MIHOMO_API/proxies/PROXY" \
+        -H 'Content-Type: application/json' \
+        -d "{\"name\": \"$1\"}" -o /dev/null -w '%{http_code}' 2>/dev/null
 }
 
 # ---------------------------------------------------------------- 主流程
-node=$(current_node)
-read -r alive total <<<"$(probe)"
+sel=$(current_selection)
+[ -z "$sel" ] && sel="?"
+node=$(resolve_node "$sel")
+[ -z "$node" ] && node="?"
 
-if [ "${alive:-0}" -gt 0 ]; then
+case "$sel" in
+    AUTO) mode="（自动）" ;;
+    "?")  mode="" ;;
+    *)    mode="（手动锁定）" ;;
+esac
+
+# 测 AUTO 组，输出 "可用数 总数 当前节点是否存活"。
+#
+# 存活判定必须是 v > 0，不能只判 isinstance(v, (int, float))。
+# mihomo 用延迟 0 表示"这一次没测通"，而 0 也是 int——按类型判会把超时的
+# 节点算成存活。机场整体漂移、所有节点都超时时，可用数就会等于节点总数，
+# guard 于是永远认为"出口正常"，自愈永远不会触发。这正是它存在的意义，
+# 判错等于把守卫变成了装饰。
+raw=$(curl -s -m 60 "$MIHOMO_API/group/AUTO/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
+if [ -z "$raw" ]; then
+    alive=0 total=0 cur_alive=0
+else
+    read -r alive total cur_alive <<<"$(printf '%s' "$raw" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("0 0 0"); sys.exit()
+cur = sys.argv[1] if len(sys.argv) > 1 else ""
+alive = [k for k, v in d.items() if isinstance(v, (int, float)) and v > 0]
+print(f"{len(alive)} {len(d)} {1 if cur in alive else 0}")
+' "$node")"
+fi
+alive=${alive:-0}
+total=${total:-0}
+cur_alive=${cur_alive:-0}
+
+# 整体没病，只是手动锁定的那一个节点病死：切回 AUTO 即可，不动缓存不重启。
+if [ "$alive" -gt 0 ] && [ "$sel" != "AUTO" ] && [ "$sel" != "?" ] && [ "$cur_alive" = "0" ]; then
+    code=$(switch_to AUTO)
+    log "锁定节点已不可用: $node（AUTO 组可用 ${alive}/${total}），自动切回 AUTO [http $code]"
     echo 0 >"$FAIL_FILE"
-    log "出口正常（可用 ${alive}/${total}，当前: $node）"
+    exit 0
+fi
+
+if [ "$alive" -gt 0 ]; then
+    echo 0 >"$FAIL_FILE"
+    log "出口正常（可用 ${alive}/${total}，当前: $node$mode）"
     exit 0
 fi
 
 n=$(cat "$FAIL_FILE" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" >"$FAIL_FILE"
-log "出口不通（可用 ${alive:-0}/${total:-0}，当前: $node，连续 $n/$FAIL_THRESHOLD）"
+log "出口不通（可用 ${alive}/${total}，当前: $node$mode，连续 $n/$FAIL_THRESHOLD）"
 
 if [ "$n" -lt "$FAIL_THRESHOLD" ]; then
     log "未达阈值，下次再确认"
@@ -118,8 +177,20 @@ echo "$now" >"$LAST_FIX"
 log "等待 ${URLTEST_WAIT}s 让 mihomo 完成 url-test"
 sleep "$URLTEST_WAIT"
 
-node=$(current_node)
-read -r alive total <<<"$(probe)"
+sel=$(current_selection)
+[ -z "$sel" ] && sel="?"
+node=$(resolve_node "$sel")
+[ -z "$node" ] && node="?"
+after=$(curl -s -m 60 "$MIHOMO_API/group/AUTO/delay?url=https://api.x.ai&timeout=8000" 2>/dev/null)
+read -r alive total cur_alive <<<"$(printf '%s' "$after" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("0 0 0"); sys.exit()
+alive = [k for k, v in d.items() if isinstance(v, (int, float)) and v > 0]
+print(f"{len(alive)} {len(d)} 0")
+')"
 if [ "${alive:-0}" -gt 0 ]; then
     log "已自愈：出口恢复（可用 ${alive}/${total}，当前: $node）"
     echo 0 >"$FAIL_FILE"

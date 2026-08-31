@@ -207,6 +207,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/admin/logs", s.adminLogs)
 	api.HandleFunc("/admin/usage", s.adminUsage)
 	api.HandleFunc("/admin/playground", s.adminPlayground)
+	api.HandleFunc("/admin/proxy", s.adminProxy)
+	api.HandleFunc("/admin/proxy/retest", s.adminProxyRetest)
 	api.HandleFunc("/metrics", s.adminPrometheus)
 	var a http.Handler = api
 	a = s.mwAdminAuth(a)
@@ -222,6 +224,8 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("/admin/logs", a)
 	root.Handle("/admin/usage", a)
 	root.Handle("/admin/playground", a)
+	root.Handle("/admin/proxy", a)
+	root.Handle("/admin/proxy/retest", a)
 	root.Handle("/metrics", a)
 	// Login/logout sit outside mwAdminAuth: login is how you earn the session,
 	// and logout only ever revokes a session the caller already holds.
