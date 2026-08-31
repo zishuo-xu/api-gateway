@@ -37,6 +37,9 @@ const (
 	// Per-node budget handed to mihomo. Keep it in step with the guard script's
 	// timeout so the console and the cron job agree on what "unreachable" means.
 	mihomoTestNodeTimeout = 8000
+	// How long node metadata stays fresh. mihomo re-tests the url-test group
+	// every five minutes, so refetching more often than this buys nothing.
+	proxyMetaTTL = 60 * time.Second
 )
 
 // proxyDelayCache holds one full sweep of per-node delays.
@@ -72,6 +75,91 @@ func (s *Server) delays() *proxyDelayCache {
 	return s.proxyDelays
 }
 
+// proxyMeta is what we know about one node: its protocol, and the last delay
+// mihomo measured for it.
+type proxyMeta struct {
+	Type    string
+	DelayMS int
+	At      time.Time // when mihomo measured DelayMS, zero if unknown
+}
+
+// proxyMetaCache remembers the per-node metadata.
+//
+// It is a separate cache from the delays because it comes from a different
+// place at a different cost. mihomo's GET /proxies lists only the nine policy
+// groups — the 70-odd real nodes are not in it at all, and asking for one by
+// name costs a request each. GET /providers/proxies carries all of them in a
+// single reply, but that reply is around 110 KB, which is far too much to
+// fetch on every two-second dashboard tick. So: fetch when stale, reuse
+// meanwhile.
+type proxyMetaCache struct {
+	mu    sync.Mutex
+	nodes map[string]proxyMeta
+	at    time.Time
+}
+
+// nodeMeta returns node metadata, refreshing it when the cached copy has aged
+// out.
+//
+// Failure to refresh is not fatal and is deliberately quiet: metadata is
+// decoration next to the delays, and treating a failed refresh as an error
+// would blank the page on a transient hiccup. On a cold cache it returns an
+// empty map rather than nil so callers can range over it unconditionally.
+func (s *Server) nodeMeta(ctx context.Context) map[string]proxyMeta {
+	c := s.meta()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && time.Since(c.at) < proxyMetaTTL {
+		return c.nodes
+	}
+	// Stale data beats a blank page, so on a failed refresh we keep whatever
+	// we had and leave the timestamp alone, which makes the next tick retry.
+	raw, err := s.mihomoGet(ctx, "/providers/proxies")
+	if err != nil {
+		log.Printf("proxy meta refresh err: %v", err)
+		if c.nodes == nil {
+			c.nodes = map[string]proxyMeta{}
+		}
+		return c.nodes
+	}
+	var mp mihomoProviders
+	if err := json.Unmarshal(raw, &mp); err != nil {
+		log.Printf("proxy meta decode err: %v", err)
+		if c.nodes == nil {
+			c.nodes = map[string]proxyMeta{}
+		}
+		return c.nodes
+	}
+	out := map[string]proxyMeta{}
+	for _, pv := range mp.Providers {
+		for _, p := range pv.Proxies {
+			m := proxyMeta{Type: p.Type}
+			// Walk backwards to the most recent probe that actually succeeded.
+			// mihomo appends a zero when a probe times out, so the tail of the
+			// history is often a run of failures that says nothing about how
+			// the node behaved beforehand.
+			for i := len(p.History) - 1; i >= 0; i-- {
+				if p.History[i].Delay > 0 {
+					m.DelayMS = p.History[i].Delay
+					if t, err := time.Parse(time.RFC3339Nano, p.History[i].Time); err == nil {
+						m.At = t
+					}
+					break
+				}
+			}
+			out[p.Name] = m
+		}
+	}
+	c.nodes = out
+	c.at = time.Now()
+	return out
+}
+
+func (s *Server) meta() *proxyMetaCache {
+	s.metaOnce.Do(func() { s.proxyMeta = &proxyMetaCache{} })
+	return s.proxyMeta
+}
+
 // proxyNode is one selectable egress target, trimmed to what the page draws.
 // mihomo's /proxies payload carries far more per node (uuid, tfo, mptcp, full
 // history arrays...) and forwarding all of it would push several hundred KB to
@@ -80,6 +168,11 @@ type proxyNode struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
 	DelayMS int    `json:"delay_ms"`
+	// Measured says the delay came from a probe this gateway ran, as opposed
+	// to one mihomo recorded earlier. Both are useful; the page labels them
+	// differently because only one is guaranteed to describe the node right
+	// now.
+	Measured bool `json:"measured"`
 }
 
 // proxyStatus is the payload behind /admin/proxy.
@@ -104,23 +197,43 @@ type proxyStatus struct {
 	// from "measured and did not answer" — two very different reasons to see
 	// a zero, and only one of them means the node is broken.
 	DelaysAgeSec int `json:"delays_age_sec"`
+	// HistoryAgeSec is the age of the newest delay mihomo recorded on its own,
+	// or -1 when no node has one. It is what lets the page show a sensible
+	// number on first open, before anyone has pressed the test button.
+	HistoryAgeSec int `json:"history_age_sec"`
 }
 
 // mihomoProxies is the subset of GET /proxies we parse. The real payload has
 // dozens of fields per node; unmarshalling into a map of this shape drops the
 // rest without having to enumerate it.
+//
+// What this endpoint actually returns is only the policy groups — on a live
+// config that is nine entries (PROXY, AUTO, DIRECT, REJECT, GLOBAL and the
+// built-ins) and not one of the subscription's real nodes. Anything a node
+// knows, including its delay history, has to come from the providers payload
+// below. Reading node fields out of here silently yields nothing at all,
+// which is a bug this shape had once already.
 type mihomoProxies struct {
 	Proxies map[string]struct {
 		Type string   `json:"type"`
 		Now  string   `json:"now"`
 		All  []string `json:"all"`
-		// History holds mihomo's past probe results, oldest first. Only the
-		// tail is read: one number per node telling us how it did last time
-		// mihomo measured it.
-		History []struct {
-			Delay int `json:"delay"`
-		} `json:"history"`
 	} `json:"proxies"`
+}
+
+// mihomoProviders is the subset of GET /providers/proxies we parse: every
+// provider's node list, each carrying its protocol and probe history.
+type mihomoProviders struct {
+	Providers map[string]struct {
+		Proxies []struct {
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			History []struct {
+				Delay int    `json:"delay"`
+				Time  string `json:"time"`
+			} `json:"history"`
+		} `json:"proxies"`
+	} `json:"providers"`
 }
 
 // adminProxy serves GET (status) and PUT (switch node) for the egress page.
@@ -312,17 +425,34 @@ func (s *Server) proxyStatus(ctx context.Context, test bool) proxyStatus {
 		st.DelaysAgeSec = int(time.Since(delaysAt).Seconds())
 	}
 
+	meta := s.nodeMeta(statusCtx)
+
+	newestHistory := time.Time{}
 	for _, name := range g.All {
 		n := proxyNode{Name: name}
+		// Group members (AUTO, DIRECT, ...) appear in /proxies; real nodes do
+		// not. Neither lookup is allowed to gate the delay.
 		if p, ok := mp.Proxies[name]; ok {
 			n.Type = p.Type
-			// mihomo's history is normally empty, but if a build does populate
-			// it, a recorded result still beats nothing.
-			if d, ok := delays[name]; ok {
-				n.DelayMS = d
-			} else if len(p.History) > 0 {
-				n.DelayMS = p.History[len(p.History)-1].Delay
+		}
+		if m, ok := meta[name]; ok {
+			if n.Type == "" {
+				n.Type = m.Type
 			}
+			if _, ok := delays[name]; !ok && m.DelayMS > 0 {
+				n.DelayMS = m.DelayMS
+				if m.At.After(newestHistory) {
+					newestHistory = m.At
+				}
+			}
+		}
+		// A probe this process ran wins over mihomo's record: it is newer and
+		// it answers the question the operator is actually asking ("is it up
+		// *now*"). A zero from our own sweep is an answer too — it means the
+		// node did not reply — and must not fall back to an old number.
+		if d, ok := delays[name]; ok {
+			n.DelayMS = d
+			n.Measured = true
 		}
 		st.Nodes = append(st.Nodes, n)
 	}
@@ -331,6 +461,18 @@ func (s *Server) proxyStatus(ctx context.Context, test bool) proxyStatus {
 		if n.DelayMS > 0 {
 			st.Alive++
 		}
+	}
+
+	st.HistoryAgeSec = -1
+	if !newestHistory.IsZero() {
+		// Clamped at zero: clock skew between mihomo and this process can put
+		// a sample a second or two in the future, and a negative age reads
+		// like corrupted data rather than the rounding error it is.
+		age := int(time.Since(newestHistory).Seconds())
+		if age < 0 {
+			age = 0
+		}
+		st.HistoryAgeSec = age
 	}
 
 	if v, err := s.mihomoGet(statusCtx, "/version"); err == nil {

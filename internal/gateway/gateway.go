@@ -106,13 +106,19 @@ type Server struct {
 	upstream *histogram
 	tokens   [2]int64 // [prompt, completion]
 
-	// proxyDelays remembers the last full egress delay sweep. mihomo has no
-	// such record to read: a node's history array comes back empty, and its
-	// periodic url-test does not write results back into it. Without a cache
-	// here every page load would report all 70-odd nodes as unreachable.
+	// proxyDelays remembers the last full egress delay sweep this process ran.
+	// It is the only source of a live answer to "is this node up right now";
+	// mihomo itself will happily re-probe a whole group but keeps no readable
+	// record of the outcome.
 	// Lazy-init so tests can build a Server by hand.
 	proxyOnce   sync.Once
 	proxyDelays *proxyDelayCache
+
+	// proxyMeta remembers per-node protocol and mihomo's own last probe result,
+	// which come from GET /providers/proxies — a ~110 KB payload, far too
+	// heavy to refetch on every two-second dashboard refresh.
+	metaOnce  sync.Once
+	proxyMeta *proxyMetaCache
 }
 
 type ctxKey int
