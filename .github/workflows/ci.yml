@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# None of the tests reach out to Redis or Postgres — every external dependency
+# is stubbed — so this job needs no service containers and no secrets.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Matches the `go` directive in go.mod: if the build starts relying
+          # on a newer language feature, CI is where we want to find out.
+          go-version: '1.22'
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            echo "Run: gofmt -w ."
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      # -race because the server runs the auditor, route reloader and quota
+      # flusher as background goroutines alongside request handling; -count=1
+      # so a cached pass never hides a real failure.
+      - name: test
+        run: go test -race -count=1 ./...
+
+      - name: build
+        run: go build ./...
