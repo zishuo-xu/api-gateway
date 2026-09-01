@@ -1097,24 +1097,30 @@ func TestRejectionReasonReachesTheLogRow(t *testing.T) {
 		t.Fatalf("unroutable call = %d, want 404", got)
 	}
 
-	// The auditor writes on its own goroutine, so poll rather than sleep once.
-	waitReason := func(want string) {
+	// The auditor writes on its own goroutine and now in batches, so poll
+	// rather than sleep once. Every wait is scoped to this test's own keys:
+	// an unscoped query can be satisfied by a row an earlier run left
+	// behind, which reads as a pass right up until the assertion that
+	// checks whose key the row actually names.
+	waitRow := func(keyID int64, cond string) {
 		t.Helper()
 		for i := 0; i < 200; i++ {
-			var got string
-			err := db.QueryRowContext(ctx, `
-				SELECT COALESCE(reject_reason,'') FROM request_logs
-				WHERE reject_reason=$1 LIMIT 1`, want).Scan(&got)
-			if err == nil && got == want {
+			var n int
+			err := db.QueryRowContext(ctx,
+				`SELECT count(*) FROM request_logs WHERE api_key_id=$1 AND `+cond, keyID).Scan(&n)
+			if err == nil && n > 0 {
 				return
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		t.Errorf("no request_logs row with reject_reason=%q", want)
+		t.Errorf("no request_logs row for key %d matching %s", keyID, cond)
 	}
 
-	waitReason("quota")
-	waitReason("no_route")
+	waitRow(cappedID, "reject_reason='quota'")
+	waitRow(openID, "reject_reason='no_route'")
+	// Wait for the served row too, or the check below would pass against an
+	// empty table instead of against the request it claims to inspect.
+	waitRow(cappedID, "status_code=200")
 
 	// A rejection must not be the only thing recorded: the row still has to
 	// name the key, or the reason is unusable.

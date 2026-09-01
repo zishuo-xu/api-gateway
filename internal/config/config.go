@@ -23,6 +23,18 @@ type Config struct {
 	// MaxAttempts is how many channels a request may try before failing. 1
 	// disables failover entirely.
 	MaxAttempts int
+	// RequestBudgetSec caps the whole failover chain, across every attempt.
+	// Without it the worst case is MaxAttempts × UpstreamTimeoutSec — 3 × 180 s
+	// = nine minutes, most of it spent after the caller stopped listening.
+	//
+	// Set this just under the client's own timeout, otherwise a retry can only
+	// run once nobody is listening any more and all it does is spend upstream
+	// quota. opencode defaults to 60 s, so 55 is the number to use with it.
+	//
+	// The budget bounds the wait for a response header only. Once an upstream
+	// starts answering, streaming onwards to the caller is no longer charged
+	// against it, so this never truncates a long answer.
+	RequestBudgetSec int
 	// TrustProxy decides whether X-Forwarded-For / X-Real-IP are used for the
 	// per-key IP allowlist. Off by default: trusting them blindly lets any
 	// client forge its source address and walk through the allowlist.
@@ -67,6 +79,23 @@ type Config struct {
 	// MihomoAutoGroup is the url-test group offered as the "give control back
 	// to mihomo" option. Empty hides that option.
 	MihomoAutoGroup string
+
+	// Circuit-breaker tuning. A circuit is per upstream (not per route), so
+	// two routes pointing at the same provider share failure history — which
+	// is what you want while that provider is down.
+	//
+	// CBFailThreshold is how many failures open a circuit. Successes do not
+	// clear the counter outright, they decrement it, so an upstream that fails
+	// half the time still trips eventually instead of never accumulating
+	// enough failures in a row.
+	CBFailThreshold int
+	// CBOpenSec is how long an open circuit refuses requests outright before
+	// letting a single probe through.
+	CBOpenSec int
+	// CBProbeSec is how long that one probe is given to come back before the
+	// circuit opens again. Only one probe is in flight at a time, so a
+	// recovering upstream is never hit by the full traffic spike at once.
+	CBProbeSec int
 }
 
 // Load reads config from environment with sensible defaults.
@@ -81,6 +110,7 @@ func Load() *Config {
 		AdminToken:         getenv("ADMIN_TOKEN", ""),
 		UpstreamTimeoutSec: getenvInt("UPSTREAM_TIMEOUT_SEC", 180),
 		MaxAttempts:        getenvInt("MAX_ATTEMPTS", 3),
+		RequestBudgetSec:   getenvInt("REQUEST_BUDGET_SEC", 300),
 		TrustProxy:         getenvBool("TRUST_PROXY", false),
 		InjectStreamUsage:  getenvBool("INJECT_STREAM_USAGE", true),
 		NormalizeParams:    getenvBool("NORMALIZE_PARAMS", true),
@@ -92,6 +122,10 @@ func Load() *Config {
 		MihomoAPI:          getenv("MIHOMO_API", ""),
 		MihomoGroup:        getenv("MIHOMO_GROUP", "PROXY"),
 		MihomoAutoGroup:    getenv("MIHOMO_AUTO_GROUP", "AUTO"),
+
+		CBFailThreshold: getenvInt("CB_FAIL_THRESHOLD", 5),
+		CBOpenSec:       getenvInt("CB_OPEN_SEC", 10),
+		CBProbeSec:      getenvInt("CB_PROBE_SEC", 5),
 	}
 }
 

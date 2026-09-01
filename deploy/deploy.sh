@@ -23,7 +23,20 @@ echo "[2/3] 服务器重建网关容器..."
 ssh aliyun 'cd /opt/api-gateway && docker compose -f deploy/docker-compose.prod.yml --env-file deploy/production.env up -d --build gateway'
 
 echo "[3/3] 健康检查..."
-sleep 3
+# 轮询 /readyz 等就绪，而不是 sleep 一个拍脑袋的数字。
+# 容器重建后网关要跑迁移、同步 key 缓存、加载路由，慢的时候不止 3 秒；
+# 固定 sleep 会在慢启动那一次偶发失败，而失败信息只是 curl 的退出码，
+# 分不清"还没起来"和"起来但是坏的"——后者才是要停下来看日志的情况。
+# /readyz 会真去 ping Redis 和 Postgres，200 才代表这两个依赖都通了。
+if ! ssh aliyun 'for i in $(seq 1 30); do
+        curl -sf -o /dev/null http://localhost:8080/readyz && exit 0
+        sleep 1
+    done
+    exit 1'; then
+    echo "网关 30 秒内未就绪。最后 50 行日志："
+    ssh aliyun 'docker compose -f /opt/api-gateway/deploy/docker-compose.prod.yml logs --tail=50 gateway'
+    exit 1
+fi
 ssh aliyun 'gw status'
 
 # --- 第 1 步：进程活着吗 ---

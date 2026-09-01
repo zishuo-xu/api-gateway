@@ -211,6 +211,30 @@ curl -X POST http://localhost:8080/admin/channels -H "$AT" -H 'Content-Type: app
 
 调试台 `POST /admin/playground` 服务端直连上游，跳过鉴权限流，**不计入统计**。
 
+### 健康检查
+
+两个端点都不需要任何凭据，也不经过鉴权、限流、配额和日志中间件——
+每几秒一次的探针若走公开链，会被 401 拒绝（读起来像"网关挂了"），
+还会往审计日志里灌满探针行。
+
+| 端点 | 语义 | 依赖不通时 |
+|---|---|---|
+| `GET /healthz` | 进程活着、监听器在服务 | 仍 `200` |
+| `GET /readyz` | 这个副本现在能处理请求 | `503`，响应体指名是哪个依赖 |
+
+两者的区别是刻意的：
+
+- **`/healthz` 是 liveness，不碰任何依赖。** 依赖一抖动就判死，会让监管者
+  去重启容器——重启既修不好依赖，还会丢掉内存里的路由表；Redis 短暂不通时
+  更是会让所有副本同时被打掉。所以 Dockerfile 的 `HEALTHCHECK` 用它。
+- **`/readyz` 是 readiness，会真去 ping Redis 和 Postgres。** 没有 Redis，
+  网关查不了 key、算不了配额、限不了流，每个请求都会以一种看起来像调用方
+  错误的方式失败。`503` 的响应体形如 `not ready: redis: EOF`，指名依赖。
+  两个依赖各有独立的 2 秒超时，一个慢不会让另一个被误报。
+
+`deploy/deploy.sh` 发版后轮询 `/readyz` 等就绪（最多 30 秒），不再 `sleep 3`——
+容器重建后要跑迁移、同步 key 缓存、加载路由，慢的时候不止 3 秒。
+
 ## 10. 流式
 
 上游返回 `text/event-stream` 或 `application/x-ndjson` 时，

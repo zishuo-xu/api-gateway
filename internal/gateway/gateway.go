@@ -67,8 +67,16 @@ type Channel struct {
 }
 
 // upstreamKey names the circuit-breaker bucket for a channel. Circuit state is
-// per upstream, not per route, so two routes pointing at the same provider
-// share failure history - which is what you want when that provider is down.
+// upstreamKey names the circuit-breaker bucket for a channel.
+//
+// The key is route + channel, so two routes pointing at the same provider keep
+// separate failure histories. That is deliberate: a channel whose credentials
+// are wrong on one route must not trip the breaker for every other route using
+// the same provider. The cost is that a shared provider has to fail enough
+// times per route before each of those routes trips.
+//
+// routeName is empty only for the synthetic channel a route with no channels
+// gets, where the route name is all there is to key on.
 func (c Channel) upstreamKey(routeName string) string {
 	if routeName == "" {
 		return c.Name
@@ -119,6 +127,13 @@ type Server struct {
 	// heavy to refetch on every two-second dashboard refresh.
 	metaOnce  sync.Once
 	proxyMeta *proxyMetaCache
+
+	// Breaker holds per-upstream circuit state. Injectable so tests can drive
+	// the state machine without a Redis server; nil builds the default on
+	// first use (see circuit.go).
+	Breaker     breaker
+	breakerOnce sync.Once
+	breakerInst breaker
 }
 
 type ctxKey int
@@ -246,6 +261,13 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("/admin/login", s.adminLogin)
 	root.HandleFunc("/admin/logout", s.adminLogout)
 	root.Handle("/admin/", ui)
+	// Liveness and readiness, registered before the catch-all so they never
+	// reach the public chain. They sit outside every middleware on purpose:
+	// a probe that needs an API key, that consumes quota, or that writes an
+	// audit row every few seconds would drown the very signals the probe is
+	// meant to protect — and a rate-limited health check fails closed.
+	root.HandleFunc("/healthz", s.healthz)
+	root.HandleFunc("/readyz", s.readyz)
 	// Registered before the catch-all so the browser's automatic icon probe
 	// never reaches the public chain. See favicon() for why that matters.
 	root.HandleFunc("/favicon.ico", s.favicon)
@@ -278,6 +300,65 @@ func (s *Server) favicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(faviconSVG)
+}
+
+// healthz is the liveness probe: the process is up and its listener is
+// serving. It deliberately touches nothing — no Postgres, no Redis, no
+// upstream.
+//
+// That is the whole value of it. A liveness probe that fails when a
+// dependency blips tells the supervisor to restart the container, and a
+// restart fixes neither the dependency nor anything else here: the route
+// table lives in process memory and has to be reloaded, and during a short
+// Redis outage every replica would go down at the same moment for no reason.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+// readyz is the readiness probe: can this replica serve a request right now.
+// It checks both dependencies, because without Redis the gateway cannot
+// resolve a key, count quota, or rate limit — every call would fail in a way
+// that looks like the caller's fault rather than ours.
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	var problems []string
+
+	// Each dependency gets its own deadline rather than sharing one budget.
+	// With a shared budget the first slow dependency spends all of it, and
+	// the second then reports a timeout it never actually had — which points
+	// whoever is debugging at a service that is perfectly healthy. That is
+	// worse than naming nothing.
+	//
+	// Bounded at all so a probe cannot hang and pile up goroutines against a
+	// dependency that is already struggling.
+	check := func(name string, ping func(context.Context) error) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := ping(ctx); err != nil {
+			problems = append(problems, name+": "+err.Error())
+		}
+	}
+	if s.RDB != nil {
+		check("redis", func(ctx context.Context) error { return s.RDB.Ping(ctx).Err() })
+	}
+	if s.DB != nil {
+		check("postgres", s.DB.PingContext)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if len(problems) > 0 {
+		// Name the dependency in the body, not just in the status code. A
+		// bare 503 sends you to look at the gateway, when what needs
+		// fixing is almost always one layer further down.
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, "not ready: %s\n", strings.Join(problems, "; "))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
 }
 
 // ----- middleware -----
@@ -353,7 +434,13 @@ func (s *Server) mwLogging(next http.Handler) http.Handler {
 				}
 			}
 
-			s.Auditor <- store.LogEntry{
+			// Non-blocking on purpose. A blocking send would make an audit
+			// row — pure telemetry, written after the response is already on
+			// the wire — into part of the request's own latency, stalling
+			// in-flight responses on how fast Postgres can accept INSERTs.
+			// Dropping the row is the lesser failure, and the count is
+			// exposed so the loss is visible rather than silent.
+			entry := store.LogEntry{
 				APIKeyID:         m.APIKeyID,
 				RouteID:          m.RouteID,
 				Method:           r.Method,
@@ -374,6 +461,11 @@ func (s *Server) mwLogging(next http.Handler) http.Handler {
 				CacheHitTokens:   m.CacheHitTokens,
 				CacheWriteTokens: m.CacheWriteTokens,
 				RejectReason:     m.RejectReason,
+			}
+			select {
+			case s.Auditor <- entry:
+			default:
+				store.NoteAuditDropped()
 			}
 		}
 	})
@@ -971,16 +1063,47 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	replayable := !oversized && body != nil
 	var lastErr string
 
+	// One budget for the whole failover chain. Without it the worst case is
+	// attempts × upstream timeout — 3 × 180 s = nine minutes — and every
+	// minute of that is spent after the caller has already given up.
+	deadline := time.Now().Add(s.requestBudget())
+
 	for i := 0; i < attempts; i++ {
+		// The client hung up. Each remaining attempt would fail instantly on a
+		// cancelled context, and would still be counted as an upstream failure
+		// — tripping the breaker over what is a client-side problem.
+		if err := r.Context().Err(); err != nil {
+			lastErr = "client disconnected"
+			if m != nil {
+				m.RejectReason = "client_gone"
+			}
+			break
+		}
 		ch := order[i]
 		if route.CBEnabled && s.isCircuitOpen(r.Context(), ch.upstreamKey(route.Name)) {
 			lastErr = "circuit open"
 			continue
 		}
 		if i > 0 {
+			// Is another attempt worth starting at all? Each one gets the full
+			// upstream timeout, so once the budget is gone an attempt can only
+			// come back after the caller stopped listening — and the upstream
+			// will have billed for work nobody reads.
+			if time.Until(deadline) <= 0 {
+				lastErr = "request budget exhausted"
+				break
+			}
 			// Linear backoff: enough for a transient blip to clear without
-			// stalling the caller on a genuinely dead channel.
-			time.Sleep(time.Duration(i) * 100 * time.Millisecond)
+			// stalling the caller on a genuinely dead channel. Never sleeps
+			// past the budget, or the sleep alone would leave the attempt
+			// nothing to run on.
+			backoff := time.Duration(i) * 100 * time.Millisecond
+			if left := time.Until(deadline); backoff > left {
+				backoff = left
+			}
+			if backoff > 0 {
+				time.Sleep(backoff)
+			}
 			log.Printf("retry route=%s path=%s attempt=%d channel=%s", route.Name, r.URL.Path, i+1, ch.Label())
 		}
 
@@ -989,9 +1112,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			reader = bytes.NewReader(body)
 		}
 
+		// No per-attempt deadline on top of the shared client timeout: an
+		// attempt cut short mid-stream truncates a perfectly good answer. The
+		// budget decides whether an attempt is worth starting, not how long it
+		// may run. What keeps a hung channel from eating the full timeout is
+		// the client-disconnect check above — it fires the moment the caller
+		// gives up, which is the only moment that actually matters.
 		resp, err := s.forward(r.Context(), r, route, ch, tgt.suffix, reader)
 		if err != nil {
-			s.recordFailure(r.Context(), ch.upstreamKey(route.Name))
+			s.noteOutcome(r.Context(), route, ch, false)
 			lastErr = err.Error()
 			continue
 		}
@@ -999,11 +1128,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// problem and replaying it against another channel just burns quota.
 		if retryableStatus(resp.StatusCode) && i < attempts-1 {
 			resp.Body.Close()
-			s.recordFailure(r.Context(), ch.upstreamKey(route.Name))
+			s.noteOutcome(r.Context(), route, ch, false)
 			lastErr = fmt.Sprintf("upstream %d", resp.StatusCode)
 			continue
 		}
-		s.recordSuccess(r.Context(), ch.upstreamKey(route.Name))
+		s.noteOutcome(r.Context(), route, ch, true)
 		s.writeUpstream(w, r, resp, route, ch)
 		return
 	}
@@ -1025,6 +1154,11 @@ func retryableStatus(code int) bool {
 }
 
 // forward issues one upstream call for a channel.
+//
+// The caller owns the context deadline. It cannot be applied inside this
+// function with a `defer cancel()`: the transport keeps reading resp.Body after
+// Do returns, so cancelling here would abort every streamed response the moment
+// it started arriving.
 //
 // The caller passes an explicit body so a failed attempt can be replayed: on a
 // retry, r.Body has already been drained, and re-sending an empty body would
@@ -1455,7 +1589,10 @@ func (s *Server) orderedChannels(route *Route) []Channel {
 		if !c.Enabled {
 			continue
 		}
-		if s.isCircuitOpen(context.Background(), c.upstreamKey(route.Name)) {
+		// Read-only on purpose. isCircuitOpen would spend this request's
+		// half-open probe here, and the caller asks again before sending — the
+		// probe would be gone by then and the recovering channel skipped.
+		if s.circuitState(context.Background(), c.upstreamKey(route.Name)) == stateOpen {
 			tripped = append(tripped, c)
 			continue
 		}
@@ -1901,6 +2038,17 @@ func (s *Server) upstreamTimeout() time.Duration {
 	return time.Duration(s.Cfg.UpstreamTimeoutSec) * time.Second
 }
 
+// requestBudget bounds the whole failover chain, not one attempt. It exists
+// because retries only help while the caller is still waiting: past that point
+// a retry cannot change the outcome, it can only spend more upstream quota on an
+// answer nobody will read.
+func (s *Server) requestBudget() time.Duration {
+	if s.Cfg == nil || s.Cfg.RequestBudgetSec <= 0 {
+		return 300 * time.Second
+	}
+	return time.Duration(s.Cfg.RequestBudgetSec) * time.Second
+}
+
 func (s *Server) maxAttempts() int {
 	if s.Cfg == nil || s.Cfg.MaxAttempts <= 0 {
 		return 3
@@ -2034,39 +2182,6 @@ func (s *Server) routeByID(id int64) *Route {
 		}
 	}
 	return nil
-}
-
-// Circuit state lives in Redis; with no client attached the breaker is simply
-// disabled rather than panicking partway through proxying a request.
-func (s *Server) isCircuitOpen(ctx context.Context, upstream string) bool {
-	if s.RDB == nil {
-		return false
-	}
-	v, err := s.RDB.Get(ctx, "cb:"+upstream).Result()
-	if err != nil {
-		return false
-	}
-	return v == "open"
-}
-
-func (s *Server) recordFailure(ctx context.Context, upstream string) {
-	if s.RDB == nil {
-		return
-	}
-	key := "cb:" + upstream + ":fail"
-	n, _ := s.RDB.Incr(ctx, key).Result()
-	s.RDB.Expire(ctx, key, 30*time.Second)
-	if n >= 5 {
-		s.RDB.Set(ctx, "cb:"+upstream, "open", 10*time.Second)
-	}
-}
-
-func (s *Server) recordSuccess(ctx context.Context, upstream string) {
-	if s.RDB == nil {
-		return
-	}
-	s.RDB.Del(ctx, "cb:"+upstream+":fail")
-	s.RDB.Del(ctx, "cb:"+upstream)
 }
 
 // circuitKeys enumerates every circuit-breaker bucket currently in use, one per

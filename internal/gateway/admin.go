@@ -331,10 +331,7 @@ func (s *Server) adminPrometheus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) circuitStatus(ctx context.Context) map[string]string {
 	m := map[string]string{}
 	for _, k := range s.circuitKeys() {
-		m[k] = "closed"
-		if s.isCircuitOpen(ctx, k) {
-			m[k] = "open"
-		}
+		m[k] = s.circuitState(ctx, k)
 	}
 	return m
 }

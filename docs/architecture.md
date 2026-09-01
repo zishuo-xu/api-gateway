@@ -33,6 +33,11 @@
 | 公开链 | `/`（兜底） | `mwLogging → mwAuth → mwQuota → mwRateLimit → mwCache → proxy` |
 | 管理 API | `/admin/{metrics,keys,routes,channels,logs,usage,playground}`、`/metrics` | `mwAdminAuth` |
 | 管理界面 | `/admin/` | 无（页面本身不含凭据） |
+| 健康检查 | `/healthz`、`/readyz` | 无（也不写审计行、不计入指标） |
+
+健康检查刻意落在三条链之外：探针每几秒一次、永远不停，一旦走公开链就会被
+`mwAuth` 拒成 401，还会往 `request_logs` 里灌满探针行。两者的语义区别见
+[usage.md](usage.md) 第 9 节。
 
 `/admin/login` 与 `/admin/logout` **刻意放在 `mwAdminAuth` 之外**——
 登录是获取会话的动作，注销只吊销调用方自己持有的会话。
@@ -46,9 +51,20 @@
 
 进程内除请求处理外还跑三个常驻协程：
 
-- `StartAuditor` —— 消费审计 channel，写 `request_logs`
+- `StartAuditor` —— 消费审计 channel，攒批写 `request_logs`
+  - 满 64 条或距上次写入 500ms 触发一次批量 INSERT。单条一个 round trip
+    会让这个纯旁路成为数据库最贵的写入来源
+  - 批量语句失败时降级为逐条重试：一条坏数据（例如 `reject_reason` 超过
+    VARCHAR(32)）只赔掉它自己，不连带同批的另外 63 条
+  - 停止函数会等队列排空（上限 3s）才返回。返回即代表行已落盘；忽略它的
+    返回值，就等于每次发版都静默丢掉缓冲区尾部
 - `FlushQuota` 定时器 —— 把 Redis 配额计数刷回 Postgres
 - `StartRouteReloader` —— 监听路由版本变化并重载路由表
+
+请求侧投递审计行是**非阻塞**的：channel 满就丢弃并计数（
+`store.AuditDropped()`）。审计是遥测，写在响应已经发出之后，为它等待
+就等于让 Postgres 的写入速度变成请求延迟的一部分。丢行必须可见——
+从 `request_logs` 读花费的人没有别的途径知道这张表是缺行的。
 
 ## 3. 请求全链路
 
