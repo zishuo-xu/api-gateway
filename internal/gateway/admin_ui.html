@@ -410,6 +410,13 @@
      A subscription easily holds 70+ nodes, so the list scrolls inside the
      panel instead of stretching the page to a few thousand pixels. */
   .scroll-y { max-height: 520px; overflow-y: auto; }
+  /* The global th rule pins the table header under the masthead with
+     `position: sticky; top: calc(--hh + --th)` (≈100 px from the viewport
+     top). That offset is the wrong reference inside a nested scrollport:
+     .scroll-y has its own overflow, and the rule pushes the header ~100 px
+     down into the middle of the rows. Stick to the inner container's top
+     instead. */
+  .scroll-y th { top: 0; }
   .egress-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
   .egress-search { background: var(--bg); border: 1px solid var(--line2); color: var(--txt);
     border-radius: 8px; padding: 8px 11px; font-size: 13px; outline: none; width: 240px;
