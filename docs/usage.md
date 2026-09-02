@@ -211,6 +211,44 @@ curl -X POST http://localhost:8080/admin/channels -H "$AT" -H 'Content-Type: app
 
 调试台 `POST /admin/playground` 服务端直连上游，跳过鉴权限流，**不计入统计**。
 
+### 路由测试连接
+
+控制台「路由配置」每行的「测试」按钮，以及渠道面板里单个渠道的「测试」，
+走 `POST /admin/routes/test`：
+
+```bash
+curl -X POST http://localhost:8080/admin/routes/test \
+  -H "X-Admin-Token: $AT" -H 'Content-Type: application/json' \
+  -d '{"route_id":6}'          # 或 {"channel_id":66} 只测一条渠道
+```
+
+探针是 `GET {base}/models`，**不消耗 token**，密钥有效即 200。结论分五类：
+
+| `kind` | 含义 | 触发 |
+|---|---|---|
+| `ok` | 连通，密钥有效 | 2xx |
+| `auth_fail` | 密钥被上游拒绝 | 401 / 403 |
+| `no_probe` | 地址可达，但没有 `/models` 端点，验证不了密钥 | 404 / 405 / 501 |
+| `unreachable` | 连不上（DNS、TLS、代理） | 网络层错误 |
+| `misconfig` | 没配 Base URL | — |
+
+`no_probe` 是黄色而不是红色：能收到 404 说明网络链路、DNS、TLS 全是通的，
+缺的只是探针端点，不该让一个通用上游因为「不叫 OpenAI」而被判失败。
+
+四个刻意的设计：
+
+- **读数据库，不读内存。** 测内存的话，刚改完 SQL 会测到旧配置——
+  而那恰恰是最需要看清的时刻。
+- **密钥优先级与 `injectCredentials` 逐行一致**：渠道 key 优先，路由 key 兜底。
+  配错层级时，`key_source` 会直接指出实际发出去的是哪一把。
+- **回显上游自己的错误报文**（`upstream_msg`，限 300 字符），不只是状态码。
+  「401」什么也不说明，「`invalid_authentication_error`」说明是密钥。
+- **永远不回显完整密钥**，只有 `key_fp`（前 8 位…后 2 位 + 长度）。
+
+每条结果还会拿测过的值跟内存里生效的配置比对，不一致就置 `stale=true`
+并在 `stale_note` 里给出立即重载的命令。没有这一步，改对了也会读作没改对——
+路由表最长 5 分钟才强制重载。
+
 ### 健康检查
 
 两个端点都不需要任何凭据，也不经过鉴权、限流、配额和日志中间件——
