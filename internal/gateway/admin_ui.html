@@ -233,6 +233,32 @@
   .fgroup input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
   .fgroup .quota-group input[type="number"] { width: auto; flex: 1; }
 
+  /* ---- route connection test results ----
+     Wider than the confirm dialog because a probe result is a table of facts,
+     not a yes/no question. Scrolls rather than clipping on short screens. */
+  .test-dialog { width: min(720px, calc(100vw - 40px)); max-height: calc(100vh - 60px);
+    overflow-y: auto; }
+  .tres { border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
+    margin-bottom: 10px; background: var(--panel2); }
+  .tres:last-child { margin-bottom: 0; }
+  .tres .thead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    margin-bottom: 7px; }
+  .tres .tname { font-weight: 600; font-size: 13.5px; }
+  .tres .tsum { font-size: 13px; color: var(--txt); margin-bottom: 8px; }
+  .tres .tmeta { font-size: 12px; color: var(--muted); line-height: 1.75;
+    word-break: break-all; }
+  .tres .tmeta b { color: var(--dim); font-weight: 500; }
+  .tres.ok { border-color: rgba(63,185,80,.45); }
+  .tres.no_probe { border-color: rgba(210,153,34,.45); }
+  .tres.bad { border-color: rgba(248,81,73,.45); }
+  .tres .upmsg { margin-top: 8px; padding: 8px 10px; border-radius: 7px;
+    background: rgba(248,81,73,.09); border: 1px solid rgba(248,81,73,.25);
+    color: var(--red); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word; }
+  .tres .stale { margin-top: 8px; padding: 8px 10px; border-radius: 7px;
+    background: rgba(210,153,34,.09); border: 1px solid rgba(210,153,34,.3);
+    color: var(--yellow); font-size: 12px; line-height: 1.65; }
+
   /* Toast replaces alert() — non-blocking, auto-dismisses. */
   .toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 14px);
     background: var(--panel); border: 1px solid var(--line2); color: var(--txt);
@@ -887,6 +913,16 @@
     </div>
   </div>
 </div>
+<div class="mask" id="test-mask">
+  <div class="dialog test-dialog" role="dialog" aria-modal="true" aria-labelledby="test-title">
+    <h3 id="test-title">测试连接</h3>
+    <div id="test-body"></div>
+    <div class="hint" id="test-hint" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn ghost" id="test-close">关闭</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <!-- Issue-Key dialog: opens on "签发新 Key", holds the whole form, and shows
@@ -976,7 +1012,12 @@ function closeDialog(v) {
   if (confirmResolve) { var r = confirmResolve; confirmResolve = null; r(!!v); }
 }
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && confirmResolve) closeDialog(false);
+  if (e.key !== "Escape") return;
+  if (confirmResolve) { closeDialog(false); return; }
+  // The test dialog reports facts rather than asking a question, so it has no
+  // promise to resolve — just dismiss it.
+  const tm = document.getElementById("test-mask");
+  if (tm && tm.className === "mask on") tm.className = "mask";
 });
 // Bound via addEventListener rather than inline onclick: static markup can pass
 // through HTML sanitizers that drop inline handlers, which would silently
@@ -1045,6 +1086,8 @@ document.addEventListener("click", function (e) {
   else if (act === "quota") setKeyQuota(id, parseInt(btn.getAttribute("data-limit"), 10) || 0);
   else if (act === "copyuri") copyText(btn.getAttribute("data-uri"), "调用地址已复制");
   else if (act === "ch") openChannels(id);
+  else if (act === "rtest") testRoute(id);
+  else if (act === "ctest") testChannel(id);
   else if (act === "chdel") deleteChannel(id);
   else if (act === "chtoggle") toggleChannel(id, btn.textContent.trim() === "启用");
 });
@@ -1396,6 +1439,7 @@ function renderRouteTable() {
       "<td class='mono'>" + r.upstream_rps + "</td>" +
       "<td class='center'>" + chBadge + "</td>" +
       "<td class='ops'>" +
+      "<button type='button' class='lk' data-act='rtest' data-id='" + r.id + "'>测试</button>" +
       "<button type='button' class='lk' data-act='ch' data-id='" + r.id + "'>渠道</button>" +
       "<button type='button' class='lk' data-act='edit' data-id='" + r.id + "'>编辑</button>" +
       "<button type='button' class='lk danger' data-act='del' data-id='" + r.id + "'>删除</button>" +
@@ -1745,8 +1789,9 @@ async function refresh() {
           cache = '<span class="warnchip" style="background:rgba(63,177,80,.16);color:var(--green);">HIT</span>';
         } else if (l.prompt_tokens > 0) {
           var hit = l.prompt_cache_hit_tokens || 0;
-          var cpct = Math.round((hit / l.prompt_tokens) * 100);
-          var ccol = cpct >= 50 ? "var(--green)" : (cpct > 0 ? "var(--yellow)" : "var(--red)");
+          var cval = (hit / l.prompt_tokens) * 100;
+          var cpct = cval.toFixed(1);
+          var ccol = cval >= 50 ? "var(--green)" : (cval > 0 ? "var(--yellow)" : "var(--red)");
           cache = "<span class='mono' style='color:" + ccol + ";white-space:nowrap' title='输入 " +
             hit.toLocaleString() + " / " + l.prompt_tokens.toLocaleString() +
             " token 命中上游前缀缓存'>" + cpct + "%" +
@@ -2384,7 +2429,8 @@ function renderChannels() {
       "<td class='center'>" + (c.circuit_open
         ? "<span class='chip-sm bad'>已熔断</span>"
         : "<span class='chip-sm ok'>正常</span>") + "</td>" +
-      "<td class='ops'><button type='button' class='lk danger' data-act='chdel' data-id='" + c.id + "'>删除</button>" +
+      "<td class='ops'><button type='button' class='lk' data-act='ctest' data-id='" + c.id + "'>测试</button>" +
+      "<button type='button' class='lk danger' data-act='chdel' data-id='" + c.id + "'>删除</button>" +
       (c.has_key ? "<span class='chip-sm' style='margin-left:6px'>带密钥</span>" : "") + "</td></tr>";
   }).join("") || emptyRow(7, "还没有渠道，请在下方添加"));
 
@@ -2466,6 +2512,103 @@ async function deleteChannel(id) {
 async function reloadRoutesOnly() {
   try { allRoutes = await getJSON("/admin/routes"); renderRouteTable(); } catch (e) {}
 }
+
+/* ---------- connection test ----------
+   The probe runs server-side against the database's current values, so it
+   answers "did I configure this right" even before the in-memory route table
+   has reloaded. When those two disagree the result says so explicitly —
+   otherwise a correct fix looks broken for up to five minutes. */
+var testBusy = false;
+
+const TEST_KIND = {
+  ok:             { cls: "ok",       tag: "通过",   color: "var(--green)" },
+  auth_fail:      { cls: "bad",      tag: "鉴权失败", color: "var(--red)" },
+  unreachable:    { cls: "bad",      tag: "不可达",  color: "var(--red)" },
+  upstream_error: { cls: "bad",      tag: "上游异常", color: "var(--red)" },
+  no_probe:       { cls: "no_probe", tag: "无法验证", color: "var(--yellow)" },
+  misconfig:      { cls: "bad",      tag: "配置缺失", color: "var(--red)" }
+};
+
+const KEY_SOURCE_LABEL = { channel: "渠道密钥", route: "路由密钥", none: "无密钥" };
+
+async function runRouteTest(payload, title) {
+  if (testBusy) return;
+  testBusy = true;
+  document.getElementById("test-title").textContent = title;
+  document.getElementById("test-body").innerHTML =
+    "<div class='muted' style='font-size:13px'>正在探测…</div>";
+  document.getElementById("test-hint").textContent = "";
+  document.getElementById("test-mask").className = "mask on";
+  try {
+    const r = await fetch("/admin/routes/test", {
+      method: "POST", headers: H, body: JSON.stringify(payload)
+    });
+    const data = await r.json().catch(function () { return null; });
+    if (!r.ok) {
+      document.getElementById("test-body").innerHTML =
+        "<div class='tres bad'><div class='tsum' style='color:var(--red)'>" +
+        escapeHtml((data && data.error) || ("请求失败：HTTP " + r.status)) + "</div></div>";
+      return;
+    }
+    renderTestResults(data);
+  } catch (e) {
+    document.getElementById("test-body").innerHTML =
+      "<div class='tres bad'><div class='tsum' style='color:var(--red)'>网络错误：" +
+      escapeHtml(String(e)) + "</div></div>";
+  } finally {
+    testBusy = false;
+  }
+}
+
+function renderTestResults(data) {
+  const list = data.results || [];
+  document.getElementById("test-body").innerHTML = list.map(function (t) {
+    const k = TEST_KIND[t.kind] || { cls: "bad", tag: t.kind || "未知", color: "var(--red)" };
+    let meta = "";
+    if (t.probe_url) meta += "<div><b>探测地址</b> " + escapeHtml(t.probe_url) + "</div>";
+    if (t.status_code) meta += "<div><b>HTTP</b> " + t.status_code +
+      " · <b>耗时</b> " + t.latency_ms + " ms</div>";
+    meta += "<div><b>密钥来源</b> " + (KEY_SOURCE_LABEL[t.key_source] || t.key_source || "—") +
+      (t.key_fp ? " · <b>指纹</b> <span class='mono'>" + escapeHtml(t.key_fp) + "</span>" : "") +
+      " · <b>格式</b> " + escapeHtml(t.format || "—") + "</div>";
+    if (t.net_error) meta += "<div><b>网络错误</b> " + escapeHtml(t.net_error) + "</div>";
+    // The upstream's own error text is the single most useful line here: "401"
+    // tells you nothing, "invalid_authentication_error" tells you the key.
+    let up = t.upstream_msg
+      ? "<div class='upmsg'>上游返回：" + escapeHtml(t.upstream_msg) + "</div>"
+      : "";
+    let stale = t.stale
+      ? "<div class='stale'>⚠ " + escapeHtml(t.stale_note || "与内存中生效的配置不一致") + "</div>"
+      : "";
+    return "<div class='tres " + k.cls + "'>" +
+      "<div class='thead'><span class='tname'>" + escapeHtml(t.channel_name || ("#" + t.channel_id)) + "</span>" +
+      "<span class='chip-sm' style='color:" + k.color + "'>" + k.tag + "</span></div>" +
+      "<div class='tsum'>" + escapeHtml(t.summary || "") + "</div>" +
+      "<div class='tmeta'>" + meta + "</div>" + up + stale + "</div>";
+  }).join("") || "<div class='muted'>没有可测的渠道。</div>";
+  document.getElementById("test-hint").textContent = data.probe_hint || "";
+}
+
+async function testRoute(id) {
+  const r = allRoutes.find(function (x) { return x.id === id; });
+  await runRouteTest({ route_id: id }, "测试连接 · " + (r ? r.name : ("#" + id)));
+}
+
+async function testChannel(id) {
+  const r = allRoutes.find(function (x) { return x.id === chRouteId; });
+  const c = r && (r.channels || []).find(function (x) { return x.id === id; });
+  await runRouteTest({ channel_id: id },
+    "测试连接 · " + (c ? (c.name || ("#" + id)) : ("#" + id)));
+}
+
+(function bindTestDialog() {
+  const mask = document.getElementById("test-mask");
+  const close = document.getElementById("test-close");
+  if (close) close.addEventListener("click", function () { mask.className = "mask"; });
+  if (mask) mask.addEventListener("click", function (e) {
+    if (e.target === mask) mask.className = "mask";
+  });
+})();
 
 function resetForm() {
   editingId = null;
