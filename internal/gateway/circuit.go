@@ -37,6 +37,12 @@ type breaker interface {
 	// state names the current state for the console. Unlike allow it never
 	// advances the machine, so polling the dashboard cannot spend a probe.
 	state(ctx context.Context, upstream string) string
+	// closeOnWitnessedSuccess closes an open or half-open circuit because an
+	// out-of-band health probe just watched the upstream answer — evidence
+	// that did not cost a user request. Returns whether it closed anything.
+	// A closed circuit is left untouched, so the failure tally keeps its
+	// meaning for real traffic.
+	closeOnWitnessedSuccess(ctx context.Context, upstream string) bool
 }
 
 // newBreaker picks the Redis-backed implementation when a client is available
@@ -174,6 +180,20 @@ func (b *memBreaker) state(ctx context.Context, up string) string {
 	return c.state
 }
 
+func (b *memBreaker) closeOnWitnessedSuccess(ctx context.Context, up string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c := b.get(up)
+	if c.state == stateClosed {
+		return false
+	}
+	c.state = stateClosed
+	c.fails = 0
+	c.until = time.Time{}
+	c.failUntil = time.Time{}
+	return true
+}
+
 // --------------------------------------------------------------------- redis
 
 // redisBreaker keeps circuit state in Redis so every replica sees the same
@@ -270,6 +290,22 @@ end
 return st or 'closed'
 `)
 
+// cbCloseScript closes a circuit that is standing open (in either sense:
+// inside its cool-down or awaiting a probe) because a health probe just
+// watched the upstream answer. It returns 1 when a circuit was closed, 0
+// when there was nothing to close — so the caller can log only real
+// recoveries, not every healthy sweep.
+//
+// KEYS[1] = circuit hash.
+var cbCloseScript = redis.NewScript(`
+local st = redis.call('HGET', KEYS[1], 'state')
+if st == 'open' or st == 'half' then
+  redis.call('DEL', KEYS[1])
+  return 1
+end
+return 0
+`)
+
 func (b *redisBreaker) allow(ctx context.Context, up string) bool {
 	n, err := cbAllowScript.Run(ctx, b.rdb, []string{b.key(up)},
 		time.Now().UnixMilli(),
@@ -312,6 +348,14 @@ func (b *redisBreaker) state(ctx context.Context, up string) string {
 		return stateClosed
 	}
 	return v
+}
+
+func (b *redisBreaker) closeOnWitnessedSuccess(ctx context.Context, up string) bool {
+	n, err := cbCloseScript.Run(ctx, b.rdb, []string{b.key(up)}).Int()
+	if err != nil {
+		return false
+	}
+	return n == 1
 }
 
 // ------------------------------------------------------------------- server

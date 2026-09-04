@@ -623,7 +623,7 @@
         <div class="sec-sub">优先级数字越小越先尝试；同优先级内按权重比例分流。上游 5xx / 429 自动切下一个渠道。</div>
       </div>
       <table>
-        <thead><tr><th>名称</th><th>Base URL</th><th class="center">优先级</th><th class="center">权重</th><th class="center">启用</th><th class="center">熔断</th><th>操作</th></tr></thead>
+        <thead><tr><th>名称</th><th>Base URL</th><th class="center">优先级</th><th class="center">权重</th><th class="center">启用</th><th class="center">熔断</th><th class="center">健康探测</th><th>操作</th></tr></thead>
         <tbody id="ch-list"></tbody>
       </table>
       <div class="ch-add">
@@ -2411,9 +2411,40 @@ function closeChannels() {
   document.getElementById("ch-panel").style.display = "none";
 }
 
+/* healthChip renders the periodic prober's last verdict for a channel.
+   The prober (HEALTH_PROBE_SEC, default 5min) re-runs the same GET /models
+   probe the "测试" button uses, so this column answers "is the upstream good
+   right now" without anyone pressing anything. A null verdict means the
+   prober has not reached this channel yet (or is disabled). */
+function healthChip(h) {
+  if (!h) return "<span class='muted' title='健康探测尚未覆盖该渠道（可能刚添加，或 HEALTH_PROBE_SEC=0 已停用）'>—</span>";
+  var cls = h.ok ? "ok" : (h.kind === "no_probe" ? "" : "bad");
+  var label = h.ok ? "正常"
+    : h.kind === "auth_fail" ? "密钥失效"
+    : h.kind === "unreachable" ? "连不上"
+    : h.kind === "upstream_error" ? "服务异常"
+    : h.kind === "no_probe" ? "可达(无探针)"
+    : h.kind === "misconfig" ? "配置缺失" : "异常";
+  var tip = (h.summary || "") + " · " + relTime(h.tested_at) +
+    (h.latency_ms ? " · " + h.latency_ms + "ms" : "") +
+    (h.stale ? " · 配置尚未生效" : "");
+  return "<span class='chip-sm " + cls + "' title='" + escapeHtml(tip) + "'>" + escapeHtml(label) + "</span>";
+}
+
+/* relTime renders an RFC3339 timestamp as a short relative age. */
+function relTime(iso) {
+  if (!iso) return "";
+  var t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + " 秒前";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  return Math.floor(s / 86400) + " 天前";
+}
+
 function renderChannels() {
-  if (chRouteId === null) return;
-  const r = allRoutes.find(x => x.id === chRouteId);
+  if (chRouteId === null) return;  const r = allRoutes.find(x => x.id === chRouteId);
   if (!r) { closeChannels(); return; }
   const list = r.channels || [];
   setRows("ch-list", list.map(function (c) {
@@ -2429,10 +2460,11 @@ function renderChannels() {
       "<td class='center'>" + (c.circuit_open
         ? "<span class='chip-sm bad'>已熔断</span>"
         : "<span class='chip-sm ok'>正常</span>") + "</td>" +
+      "<td class='center'>" + healthChip(c.health) + "</td>" +
       "<td class='ops'><button type='button' class='lk' data-act='ctest' data-id='" + c.id + "'>测试</button>" +
       "<button type='button' class='lk danger' data-act='chdel' data-id='" + c.id + "'>删除</button>" +
       (c.has_key ? "<span class='chip-sm' style='margin-left:6px'>带密钥</span>" : "") + "</td></tr>";
-  }).join("") || emptyRow(7, "还没有渠道，请在下方添加"));
+  }).join("") || emptyRow(8, "还没有渠道，请在下方添加"));
 
   document.getElementById("ch-hint").innerHTML = list.length
     ? "共 " + list.length + " 个渠道。" + (r.healthy_channels || 0) + " 个当前可用（启用且未熔断）。"

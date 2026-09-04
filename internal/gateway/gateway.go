@@ -134,6 +134,11 @@ type Server struct {
 	Breaker     breaker
 	breakerOnce sync.Once
 	breakerInst breaker
+
+	// health is the periodic upstream prober's memory (see health.go).
+	// Lazy-built via healthResults so tests can construct a Server by hand.
+	healthOnce sync.Once
+	health     *healthStore
 }
 
 type ctxKey int
@@ -233,6 +238,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/admin/keys", s.adminKeys)
 	api.HandleFunc("/admin/routes", s.adminRoutes)
 	api.HandleFunc("/admin/routes/test", s.adminRouteTest)
+	api.HandleFunc("/admin/health", s.adminHealth)
 	api.HandleFunc("/admin/channels", s.adminChannels)
 	api.HandleFunc("/admin/logs", s.adminLogs)
 	api.HandleFunc("/admin/usage", s.adminUsage)
@@ -251,6 +257,7 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("/admin/keys", a)
 	root.Handle("/admin/routes", a)
 	root.Handle("/admin/routes/test", a)
+	root.Handle("/admin/health", a)
 	root.Handle("/admin/channels", a)
 	root.Handle("/admin/logs", a)
 	root.Handle("/admin/usage", a)

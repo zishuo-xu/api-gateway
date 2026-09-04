@@ -96,6 +96,13 @@ type Config struct {
 	// circuit opens again. Only one probe is in flight at a time, so a
 	// recovering upstream is never hit by the full traffic spike at once.
 	CBProbeSec int
+
+	// HealthProbeSec is how often every enabled channel is probed against its
+	// provider (GET /models, no tokens spent). The verdicts feed the console's
+	// health column, and a successful probe closes a circuit that is standing
+	// open so a recovered upstream serves again at the next sweep instead of
+	// after the open window. 0 disables the prober.
+	HealthProbeSec int
 }
 
 // Load reads config from environment with sensible defaults.
@@ -126,6 +133,7 @@ func Load() *Config {
 		CBFailThreshold: getenvInt("CB_FAIL_THRESHOLD", 5),
 		CBOpenSec:       getenvInt("CB_OPEN_SEC", 10),
 		CBProbeSec:      getenvInt("CB_PROBE_SEC", 5),
+		HealthProbeSec:  getenvInt("HEALTH_PROBE_SEC", 300),
 	}
 }
 

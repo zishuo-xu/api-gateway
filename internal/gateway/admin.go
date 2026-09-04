@@ -661,16 +661,17 @@ type routeRow struct {
 }
 
 type channelRow struct {
-	ID        int64  `json:"id"`
-	RouteID   int64  `json:"route_id"`
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	APIFormat string `json:"api_format"`
-	Weight    int    `json:"weight"`
-	Priority  int    `json:"priority"`
-	Enabled   bool   `json:"enabled"`
-	HasKey    bool   `json:"has_key"` // never expose the provider key
-	Open      bool   `json:"circuit_open"`
+	ID        int64         `json:"id"`
+	RouteID   int64         `json:"route_id"`
+	Name      string        `json:"name"`
+	BaseURL   string        `json:"base_url"`
+	APIFormat string        `json:"api_format"`
+	Weight    int           `json:"weight"`
+	Priority  int           `json:"priority"`
+	Enabled   bool          `json:"enabled"`
+	HasKey    bool          `json:"has_key"` // never expose the provider key
+	Open      bool          `json:"circuit_open"`
+	Health    *healthResult `json:"health,omitempty"` // last periodic probe verdict, if the prober has run
 }
 
 func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
@@ -688,12 +689,17 @@ func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
 			Models: rt.Models, CacheScope: normaliseCacheScope(rt.CacheScope),
 		}
 		for _, c := range rt.Channels {
-			row.Channels = append(row.Channels, channelRow{
+			cr := channelRow{
 				ID: c.ID, RouteID: c.RouteID, Name: c.Name, BaseURL: c.BaseURL,
 				APIFormat: c.APIFormat, Weight: c.Weight, Priority: c.Priority,
 				Enabled: c.Enabled, HasKey: c.DownstreamAuthKey != "",
 				Open: s.isCircuitOpen(r.Context(), c.upstreamKey(rt.Name)),
-			})
+			}
+			if res, ok := s.healthResults().get(rt.ID, c.ID); ok {
+				resCopy := res
+				cr.Health = &resCopy
+			}
+			row.Channels = append(row.Channels, cr)
 			if c.Enabled && !s.isCircuitOpen(r.Context(), c.upstreamKey(rt.Name)) {
 				row.Healthy++
 			}

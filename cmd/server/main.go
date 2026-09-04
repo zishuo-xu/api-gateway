@@ -98,6 +98,15 @@ func main() {
 	stopReloader := srv.StartRouteReloader(time.Duration(cfg.RouteReloadSec)*time.Second, 0)
 	defer stopReloader()
 
+	// The prober is what turns "the channel died at 3am" from a user-visible
+	// outage into a red console row. Without it the only health signal is the
+	// next real request failing.
+	if cfg.HealthProbeSec > 0 {
+		stopProber := srv.StartHealthProber(time.Duration(cfg.HealthProbeSec) * time.Second)
+		defer stopProber()
+		log.Printf("health prober running every %ds", cfg.HealthProbeSec)
+	}
+
 	s := &http.Server{
 		Addr:    cfg.GatewayAddr,
 		Handler: srv.Handler(),
