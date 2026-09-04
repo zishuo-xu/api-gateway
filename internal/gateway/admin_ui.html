@@ -583,6 +583,12 @@
               </div>
             </div>
             <div class="field">
+              <label>密钥失效降级 <span class="tip">· 401/403 换渠道</span></label>
+              <div style="display:flex;align-items:center;height:37px;">
+                <label style="color:var(--txt);font-size:13px;margin:0;" title="开启后：某渠道的密钥被上游拒绝（401/403）时，自动换下一个渠道重试，而不是直接把 401 返回给调用方。适用于主备密钥场景。关闭时（默认）401 视为调用方问题，不换渠道"><input type="checkbox" id="f-fba" name="fallback_on_auth" onchange="formState['fallback_on_auth']=this.checked" /> 启用</label>
+              </div>
+            </div>
+            <div class="field">
               <label>缓存归属 <span class="tip">· GET 响应</span></label>
               <select id="f-scope" name="cache_scope" onchange="formState['cache_scope']=this.value">
                 <option value="global">全局共享（省上游调用）</option>
@@ -1116,6 +1122,7 @@ let formState = {
   upstream_rps: "50",
   cache_ttl: "30",
   cb_enabled: true,
+  fallback_on_auth: false,
   downstream_auth_key: "",
   base_url: "",
   match_path: ""
@@ -1896,6 +1903,7 @@ async function saveRoute(btn) {
       upstream_rps: parseInt(readField("upstream_rps"), 10) || 50,
       cache_ttl: parseInt(readField("cache_ttl"), 10) || 30,
       cb_enabled: formState.cb_enabled !== false,
+      fallback_on_auth: formState.fallback_on_auth === true,
       api_format: readField("api_format") || "openai-chat",
       downstream_auth_key: readField("downstream_auth_key"),
       models: editingModels.slice(),
@@ -1936,6 +1944,7 @@ function editRoute(id) {
   document.getElementById("f-rps").value = r.upstream_rps;
   document.getElementById("f-ttl").value = r.cache_ttl;
   document.getElementById("f-cb").checked = r.cb_enabled;
+  document.getElementById("f-fba").checked = r.fallback_on_auth === true;
   document.getElementById("f-scope").value = r.cache_scope === "key" ? "key" : "global";
   document.getElementById("f-dskey").value = ""; // never expose key back for security
   editingModels = (r.models && r.models.length) ? r.models.slice() : [];
@@ -1949,6 +1958,7 @@ function editRoute(id) {
     cache_ttl: String(r.cache_ttl),
     cache_scope: r.cache_scope === "key" ? "key" : "global",
     cb_enabled: r.cb_enabled,
+    fallback_on_auth: r.fallback_on_auth === true,
     downstream_auth_key: "",
     base_url: r.base_url,
     match_path: r.match_prefix

@@ -652,6 +652,7 @@ type routeRow struct {
 	UpstreamRPS      int          `json:"upstream_rps"`
 	CacheTTL         int          `json:"cache_ttl"`
 	CBEnabled        bool         `json:"cb_enabled"`
+	FallbackOnAuth   bool         `json:"fallback_on_auth"`
 	APIFormat        string       `json:"api_format"`
 	HasDownstreamKey bool         `json:"has_downstream_key"` // true if key is set (never expose the actual key in list)
 	Models           []string     `json:"models"`
@@ -685,7 +686,8 @@ func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
 		row := routeRow{
 			ID: rt.ID, Name: rt.Name, BaseURL: rt.BaseURL, MatchPrefix: rt.MatchPrefix,
 			UpstreamRPS: rt.UpstreamRPS, CacheTTL: rt.CacheTTL, CBEnabled: rt.CBEnabled,
-			APIFormat: rt.APIFormat, HasDownstreamKey: rt.DownstreamAuthKey != "",
+			FallbackOnAuth: rt.FallbackOnAuth,
+			APIFormat:      rt.APIFormat, HasDownstreamKey: rt.DownstreamAuthKey != "",
 			Models: rt.Models, CacheScope: normaliseCacheScope(rt.CacheScope),
 		}
 		for _, c := range rt.Channels {
@@ -716,6 +718,7 @@ type routeInput struct {
 	UpstreamRPS       int    `json:"upstream_rps"`
 	CacheTTL          int    `json:"cache_ttl"`
 	CBEnabled         bool   `json:"cb_enabled"`
+	FallbackOnAuth    bool   `json:"fallback_on_auth"`
 	APIFormat         string `json:"api_format"`          // openai-chat / anthropic-messages / generic
 	DownstreamAuthKey string `json:"downstream_auth_key"` // provider's API key
 	// Models is a pointer so a partial update can tell "field absent" (nil =
@@ -940,10 +943,10 @@ func (s *Server) createRoute(w http.ResponseWriter, r *http.Request) {
 	var id int64
 	err := s.DB.QueryRowContext(r.Context(),
 		`INSERT INTO routes (name, base_url, match_path, auth_type, upstream_rps, cache_ttl, cb_enabled,
-		                         api_format, downstream_auth_key, models, status, cache_scope)
-		 VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,1,$10) RETURNING id`,
+		                         fallback_on_auth, api_format, downstream_auth_key, models, status, cache_scope)
+		 VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10,1,$11) RETURNING id`,
 		in.Name, in.BaseURL, in.MatchPath, in.UpstreamRPS, in.CacheTTL, in.CBEnabled,
-		in.APIFormat, in.DownstreamAuthKey, modelsText,
+		in.FallbackOnAuth, in.APIFormat, in.DownstreamAuthKey, modelsText,
 		normaliseCacheScope(in.CacheScope)).Scan(&id)
 	if err != nil {
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
@@ -999,12 +1002,12 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
 	modelsText, _ := in.modelListJSON()
 	if _, err := s.DB.ExecContext(r.Context(),
 		`UPDATE routes SET name=$1, base_url=$2, match_path=$3, upstream_rps=$4, cache_ttl=$5,
-		         cb_enabled=$6, api_format=$7, downstream_auth_key=$8,
-		         models      = COALESCE(NULLIF($9,'') , models),
-		         cache_scope = COALESCE(NULLIF($10,''), cache_scope)
-		 WHERE id=$11 AND status=1`,
+		         cb_enabled=$6, fallback_on_auth=$7, api_format=$8, downstream_auth_key=$9,
+		         models      = COALESCE(NULLIF($10,'') , models),
+		         cache_scope = COALESCE(NULLIF($11,''), cache_scope)
+		 WHERE id=$12 AND status=1`,
 		in.Name, in.BaseURL, in.MatchPath, in.UpstreamRPS, in.CacheTTL, in.CBEnabled,
-		in.APIFormat, in.DownstreamAuthKey,
+		in.FallbackOnAuth, in.APIFormat, in.DownstreamAuthKey,
 		// Blank -> COALESCE keeps the stored value. An explicit "[]" clears the
 		// allowlist, which is why this needs to be a pointer rather than a slice.
 		modelsText,

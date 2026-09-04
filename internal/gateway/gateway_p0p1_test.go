@@ -521,6 +521,139 @@ func TestNoFailoverOnClientError(t *testing.T) {
 	}
 }
 
+// A route with fallback_on_auth on treats a channel's own 401/403 as "this
+// credential is dead" and moves to the next channel — that is the whole point
+// of keeping a backup key. Without the flag the same 401 goes straight back
+// to the caller, because an auth failure is usually the caller's mistake and
+// no other channel can fix it.
+func TestFallbackOnAuthFailsOverOn401(t *testing.T) {
+	var hits [2]int64
+	newUp := func(i int, status int, body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&hits[i], 1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+	dead := newUp(0, http.StatusUnauthorized,
+		`{"error":{"type":"invalid_authentication_error","message":"Invalid Authentication"}}`)
+	defer dead.Close()
+	backup := newUp(1, http.StatusOK, `{"channel":"backup"}`)
+	defer backup.Close()
+
+	s := &Server{Cfg: &config.Config{UpstreamTimeoutSec: 10, MaxAttempts: 3}}
+	s.Routes = []Route{{
+		Name: "kimi", BaseURL: dead.URL, MatchPrefix: "/kimi", Upstream: "kimi",
+		APIFormat: "openai-chat", UpstreamRPS: 1000, FallbackOnAuth: true,
+		Channels: []Channel{
+			{ID: 1, Name: "primary", BaseURL: dead.URL, Weight: 1, Priority: 0, Enabled: true},
+			{ID: 2, Name: "backup", BaseURL: backup.URL, Weight: 1, Priority: 1, Enabled: true},
+		},
+	}}
+	ts := httptest.NewServer(http.HandlerFunc(s.proxy))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/kimi/chat/completions",
+		strings.NewReader(`{"model":"k3","messages":[]}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after auth failover (body %q)", resp.StatusCode, body)
+	}
+	if hits[0] != 1 || hits[1] != 1 {
+		t.Errorf("hits = [%d %d], want [1 1]: the dead key must be tried once, "+
+			"then the backup", hits[0], hits[1])
+	}
+}
+
+// The flag defaults off for a reason: a 401 from a wrong model name or a bad
+// client-supplied key must not be replayed against every channel, burning
+// each one's quota for an answer none of them can give.
+func TestAuthFailureStaysPutByDefault(t *testing.T) {
+	var hits [2]int64
+	newUp := func(i int, status int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&hits[i], 1)
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{}`))
+		}))
+	}
+	a := newUp(0, http.StatusUnauthorized)
+	defer a.Close()
+	b := newUp(1, http.StatusOK)
+	defer b.Close()
+
+	s := &Server{Cfg: &config.Config{UpstreamTimeoutSec: 10, MaxAttempts: 3}}
+	s.Routes = []Route{{
+		Name: "nx2", BaseURL: a.URL, MatchPrefix: "/nx2", Upstream: "nx2",
+		APIFormat: "openai-chat", UpstreamRPS: 1000, // FallbackOnAuth unset: off
+		Channels: []Channel{
+			{ID: 1, Name: "a", BaseURL: a.URL, Weight: 1, Enabled: true},
+			{ID: 2, Name: "b", BaseURL: b.URL, Weight: 1, Priority: 1, Enabled: true},
+		},
+	}}
+	ts := httptest.NewServer(http.HandlerFunc(s.proxy))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/nx2", strings.NewReader(`{}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401: with the flag off the caller gets the "+
+			"auth failure as-is", resp.StatusCode)
+	}
+	if hits[1] != 0 {
+		t.Errorf("backup channel hit %d times, want 0 (auth failure is the "+
+			"caller's problem by default)", hits[1])
+	}
+}
+
+// Failover must never hide total failure: when the *last* channel answers
+// 401, the caller gets that 401, not a generic 502. Otherwise "every key is
+// dead" reads the same as "the gateway broke".
+func TestFallbackOnAuthLastChannelReturnsTheReal401(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"all keys dead"}}`))
+	}))
+	defer up.Close()
+
+	s := &Server{Cfg: &config.Config{UpstreamTimeoutSec: 10, MaxAttempts: 3}}
+	s.Routes = []Route{{
+		Name: "kimi2", BaseURL: up.URL, MatchPrefix: "/kimi2", Upstream: "kimi2",
+		APIFormat: "openai-chat", UpstreamRPS: 1000, FallbackOnAuth: true,
+		Channels: []Channel{
+			{ID: 1, Name: "only", BaseURL: up.URL, Weight: 1, Enabled: true},
+		},
+	}}
+	ts := httptest.NewServer(http.HandlerFunc(s.proxy))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/kimi2/chat/completions",
+		strings.NewReader(`{"model":"k3"}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want the upstream's own 401 (body %q): with "+
+			"nowhere left to fail over to, the caller must see the real answer",
+			resp.StatusCode, body)
+	}
+}
+
 // Priority tiers: everything goes to the lowest-numbered tier while it is up.
 func TestChannelPriorityPrefersLowerTier(t *testing.T) {
 	var hits [2]int64

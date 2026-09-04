@@ -143,4 +143,16 @@ CREATE TABLE IF NOT EXISTS channels (
   created_at          TIMESTAMPTZ DEFAULT now()
 );
 
+-- ---------------------------------------------------------------------------
+-- routes.fallback_on_auth: treat a channel's 401/403 as failover-worthy.
+--
+-- Default false because an auth failure is usually the caller's problem (a
+-- wrong model name, an expired key the client sent) and replaying it on the
+-- next channel only burns that channel's quota. Turn it on for routes whose
+-- channels hold *provider* credentials of differing quality — e.g. a primary
+-- Kimi key and a cheaper backup key — so one channel's dead key degrades to
+-- the backup instead of failing the caller outright.
+-- ---------------------------------------------------------------------------
+ALTER TABLE routes ADD COLUMN IF NOT EXISTS fallback_on_auth BOOLEAN DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_channels_route ON channels(route_id);

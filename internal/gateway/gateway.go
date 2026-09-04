@@ -31,14 +31,20 @@ import (
 // the shared policy (rate limit, cache, model allowlist); the actual upstreams
 // live in Channels so one prefix can fan out to several providers.
 type Route struct {
-	ID                int64
-	Name              string
-	BaseURL           string
-	MatchPrefix       string // e.g. /v1/weather
-	Upstream          string // upstream key for CB/limit
-	UpstreamRPS       int
-	CacheTTL          int
-	CBEnabled         bool
+	ID          int64
+	Name        string
+	BaseURL     string
+	MatchPrefix string // e.g. /v1/weather
+	Upstream    string // upstream key for CB/limit
+	UpstreamRPS int
+	CacheTTL    int
+	CBEnabled   bool
+	// FallbackOnAuth lets a channel's 401/403 fail over to the next channel.
+	// Off by default: an auth failure is usually the caller's own mistake
+	// (wrong model, bad client key), and replaying it on another channel just
+	// spends that channel's quota. On for routes whose channels hold provider
+	// keys of differing quality, so one dead key degrades to the backup.
+	FallbackOnAuth    bool
 	APIFormat         string   // openai-chat / openai-responses / anthropic-messages / generic
 	DownstreamAuthKey string   // provider API key (gateway injects on forward)
 	Models            []string // allowed model IDs (parsed from JSON)
@@ -1134,8 +1140,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Fail over on upstream-side failures only. A 4xx is the caller's
-		// problem and replaying it against another channel just burns quota.
-		if retryableStatus(resp.StatusCode) && i < attempts-1 {
+		// problem and replaying it against another channel just burns quota —
+		// unless the route opted into auth failover, in which case a channel's
+		// own dead credential (401/403) is exactly the case a backup key
+		// exists for.
+		if s.retryable(route, resp.StatusCode) && i < attempts-1 {
 			resp.Body.Close()
 			s.noteOutcome(r.Context(), route, ch, false)
 			lastErr = fmt.Sprintf("upstream %d", resp.StatusCode)
@@ -1160,6 +1169,21 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 // second channel would succeed.
 func retryableStatus(code int) bool {
 	return code >= 500 || code == http.StatusTooManyRequests || code == http.StatusRequestTimeout
+}
+
+// retryable decides whether this status is worth replaying on the next
+// channel of this route. The route matters only for auth failures: with
+// fallback_on_auth on, a 401/403 means "this channel's credential is dead",
+// which a backup channel's credential can answer. With it off, an auth
+// failure is the caller's own problem and no other channel can fix it.
+func (s *Server) retryable(route *Route, code int) bool {
+	if retryableStatus(code) {
+		return true
+	}
+	if route != nil && route.FallbackOnAuth {
+		return code == http.StatusUnauthorized || code == http.StatusForbidden
+	}
+	return false
 }
 
 // forward issues one upstream call for a channel.
@@ -2230,6 +2254,7 @@ func adoptChannelFormat(route *Route) {
 func LoadRoutes(db *sql.DB) ([]Route, error) {
 	rows, err := db.QueryContext(context.Background(), `
 		SELECT id, name, base_url, match_path, upstream_rps, cache_ttl, cb_enabled,
+		       COALESCE(fallback_on_auth, false),
 		       api_format, COALESCE(downstream_auth_key,''), COALESCE(models,'[]'),
 		       COALESCE(cache_scope,'global')
 		FROM routes WHERE status = 1 ORDER BY id
@@ -2244,6 +2269,7 @@ func LoadRoutes(db *sql.DB) ([]Route, error) {
 		var match string
 		var modelsJSON string
 		if err := rows.Scan(&r.ID, &r.Name, &r.BaseURL, &match, &r.UpstreamRPS, &r.CacheTTL, &r.CBEnabled,
+			&r.FallbackOnAuth,
 			&r.APIFormat, &r.DownstreamAuthKey, &modelsJSON, &r.CacheScope); err != nil {
 			return nil, err
 		}
