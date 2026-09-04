@@ -52,6 +52,7 @@ hey -n 5000 -c 100 -H "X-API-Key: test-key-123" \
 | `AUTO_MIGRATE` | true | 启动时执行 `migrate.sql`（幂等） |
 | `UNIFIED_PREFIX` | `/v1` | 统一入口前缀，设 `off` 关闭 |
 | `ROUTE_RELOAD_SEC` | 10 | 多副本路由同步检查间隔，0 为关闭 |
+| `HEALTH_PROBE_SEC` | 300 | 上游健康探测间隔：对所有启用渠道跑 GET /models（不耗 token），结果进控制台「健康探测」列；探测成功会提前闭合熔断中的渠道。0 为关闭 |
 | `IP_RPS` | 0 | 单 IP 限流，默认关闭 |
 
 > 已有数据库升级靠 `migrate.sql`（启动时自动跑，`AUTO_MIGRATE=false` 可关）。
@@ -248,6 +249,31 @@ curl -X POST http://localhost:8080/admin/routes/test \
 每条结果还会拿测过的值跟内存里生效的配置比对，不一致就置 `stale=true`
 并在 `stale_note` 里给出立即重载的命令。没有这一步，改对了也会读作没改对——
 路由表最长 5 分钟才强制重载。
+
+### 上游健康探测（定期）
+
+「测试连接」是被动的：只有人在看控制台时才会跑。健康探测是它的主动版——
+按 `HEALTH_PROBE_SEC`（默认 300 秒）对所有**启用**渠道的**数据库配置**
+重跑同一个 `GET /models` 探针，每个渠道记住最近一次结论。
+
+两个用途：
+
+- **控制台「健康探测」列**（渠道面板里，熔断状态旁边）：
+  正常 / 密钥失效 / 连不上 / 服务异常 / 可达(无探针)，悬停显示延迟与探测时间。
+  数据来自 `GET /admin/health`，渠道行的 `health` 字段也内嵌在 `/admin/routes` 里。
+- **熔断提前恢复**：探测成功时，若该渠道的熔断器正开着，
+  通过 `breaker.closeOnWitnessedSuccess` 立即闭合——冷却窗口是为了挡用户流量，
+  探测不是用户流量，它亲眼看到的成功是最强的恢复信号。
+  没有这一步，恢复中的上游要等完整个开放窗口、再赔上一个真实请求做半开探测。
+
+**探测失败永远不会记进熔断器**：探测读的是数据库，可能与生效中的配置差着
+一次重载，它的失败不是"网关在用的上游坏了"的证据。记进去的话，
+一个过期探测会把真实流量维持得好好的熔断器拍翻。
+
+```bash
+curl -s http://localhost:8080/admin/health -H "X-Admin-Token: $AT"
+# {"enabled":true,"interval_sec":300,"results":[{"channel_id":66,"ok":true,"kind":"ok",...}]}
+```
 
 ### 健康检查
 
